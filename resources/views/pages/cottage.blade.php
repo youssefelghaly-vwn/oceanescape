@@ -276,7 +276,7 @@
                         <h2 class="font-display text-2xl font-medium text-ink-900">Availability &amp; nightly rates</h2>
                         <span class="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wide text-tide-500">
                             <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-500"></span>
-                            <span x-text="loading ? 'Loading rates…' : 'Live from Lodgify'"></span>
+                            <span x-text="loading ? 'Loading rates…' : 'Live Prices'"></span>
                         </span>
                     </div>
 
