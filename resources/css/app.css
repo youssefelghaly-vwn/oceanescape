@@ -1,0 +1,113 @@
+@import 'tailwindcss';
+/*
+ |--------------------------------------------------------------------------
+ | Design tokens
+ |--------------------------------------------------------------------------
+ | Tailwind v4 is CSS-first — no tailwind.config.js needed for this.
+ | Everything below becomes real utilities: bg-brand-600, text-ink-900,
+ | font-display, animate-marquee, etc. Content scanning is automatic in v4,
+ | so there is no `content: []` array to maintain either.
+ */
+
+@theme {
+    /* Brand teal — matches the existing oceanescapecottages.ca CTA color (#247276) */
+    --color-brand-50: #eef5f5;
+    --color-brand-100: #d7e8e9;
+    --color-brand-200: #aed3d4;
+    --color-brand-300: #7ebabc;
+    --color-brand-400: #4c9a9d;
+    --color-brand-500: #2f8286;
+    --color-brand-600: #247276;
+    --color-brand-700: #1c5c5f;
+    --color-brand-800: #17494b;
+    --color-brand-900: #123738;
+
+    /* Fog — cool overcast-Atlantic neutral. Not warm cream on purpose. */
+    --color-fog-50: #f6f8f8;
+    --color-fog-100: #edf1f1;
+    --color-fog-200: #dde4e5;
+    --color-fog-300: #c2ccce;
+
+    /* Ink — deep teal-charcoal for dark sections, text, the marquee strip */
+    --color-ink-700: #263a3d;
+    --color-ink-800: #16262a;
+    --color-ink-900: #0f1e21;
+
+    /* Tide — muted secondary tone for captions / borders */
+    --color-tide-400: #8fa4a6;
+    --color-tide-500: #6d8689;
+
+    /* Buoy — nautical safety-orange. Used sparingly, only for live/urgent
+       availability signals (e.g. "2 nights left"). Never decorative. */
+    --color-buoy-500: #d6472f;
+    --color-buoy-600: #b83a25;
+
+    /* Type */
+    --font-display: "Fraunces", ui-serif, Georgia, serif;
+    --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+    --font-mono: "Space Mono", ui-monospace, "SFMono-Regular", monospace;
+
+    /* Motion */
+    --animate-fade-up: fade-up 0.9s cubic-bezier(0.16, 1, 0.3, 1) both;
+    --animate-marquee: marquee 32s linear infinite;
+}
+
+@keyframes fade-up {
+    from {
+        opacity: 0;
+        transform: translateY(22px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes marquee {
+    from {
+        transform: translateX(0);
+    }
+    to {
+        transform: translateX(-50%);
+    }
+}
+
+@layer base {
+    html {
+        scroll-behavior: smooth;
+    }
+    body {
+        @apply bg-fog-50 font-sans text-ink-900 antialiased;
+    }
+    ::selection {
+        @apply bg-brand-200 text-ink-900;
+    }
+}
+
+@layer components {
+    /* Underline-grow link used across the nav */
+    .nav-link {
+        @apply relative py-2 text-sm font-medium tracking-wide;
+    }
+    .nav-link::after {
+        content: "";
+        @apply absolute -bottom-0.5 left-0 h-px w-0 bg-current transition-all duration-300 ease-out;
+    }
+    .nav-link:hover::after {
+        @apply w-full;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    * {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}
+
+[x-cloak] {
+    display: none !important;
+}
+ 
