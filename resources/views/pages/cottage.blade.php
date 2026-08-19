@@ -1,15 +1,19 @@
 {{-- resources/views/pages/cottage.blade.php
 
-     Content order is deliberate — most decision-critical info first:
-       1. Gallery + name + location + price-from + key facts   (is this the right place?)
-       2. Booking panel (sticky)                               (can I get it?)
-       3. Calendar with per-night prices                        (when, and how much?)
-       4. Live breakdown for chosen dates                       (what will I actually pay?)
-       5. Description                                           (tell me more)
-       6. Amenities                                             (does it have X?)
-       7. Seasonal rates                                        (is another month cheaper?)
-       8. House rules & check-in                                (fine print)
-       9. Location & map                                        (where exactly?)
+     Content order is deliberate — most decision-critical information first:
+       1. Gallery                      is this the right place?
+       2. Identity + key facts         who is it for?
+       3. Calendar with prices         when, and how much?
+       4. Live breakdown               what will I actually pay?
+       5. Description                  tell me more
+       6. Amenities                    does it have X?
+       7. Seasonal rates               is another month cheaper?
+       8. House rules & check-in       fine print
+       9. Location & map               where exactly?
+
+     The sticky panel on the right carries the whole booking flow, ending in a
+     handoff to Lodgify's hosted checkout — which collects contact details and
+     submits a REQUEST without taking payment, matching how this business works.
 --}}
 <x-website-layout :title="$cottage->name . ' | Ocean Escape Cottages'">
 
@@ -19,7 +23,8 @@
         ratesUrl: '{{ route('api.cottage.rates', $cottage->slug) }}',
         quoteUrl: '{{ route('api.cottage.quote', $cottage->slug) }}',
         addonsUrl: '{{ route('api.cottage.addons', $cottage->slug) }}',
-        currency: '{{ $cottage->currency ?? 'USD' }}',
+        bookUrl: '{{ route('booking.redirect', $cottage->slug) }}',
+        currency: '{{ $cottage->currency ?? 'CAD' }}',
         maxGuests: {{ $cottage->maxGuests ?: 'null' }},
         petsAllowed: {{ $cottage->petFriendly ? 'true' : 'false' }},
         arrival: {{ $arrival ? "'".$arrival."'" : 'null' }},
@@ -143,7 +148,6 @@
                  x-ref="dialog" tabindex="-1"
                  @click.self="hide()">
 
-                {{-- top bar --}}
                 <div class="flex items-center justify-between px-5 py-4 sm:px-8">
                     <p class="font-mono text-[11px] uppercase tracking-wider text-white/60">
                         <span x-text="index + 1"></span> / <span x-text="count"></span>
@@ -156,7 +160,6 @@
                     </button>
                 </div>
 
-                {{-- stage --}}
                 <div class="relative flex min-h-0 flex-1 items-center justify-center px-4 sm:px-16"
                      @touchstart.passive="onTouchStart($event)"
                      @touchend.passive="onTouchEnd($event)">
@@ -168,6 +171,8 @@
 
                     <div class="relative flex h-full max-h-full w-full items-center justify-center">
                         <template x-if="current">
+                            {{-- @@error is escaped Blade: it must reach the browser as a
+                                 literal @error for Alpine, not be eaten as a directive. --}}
                             <img :src="current.full" :alt="current.alt"
                                  @load="loading = false"
                                  @@error="loading = false; $el.src = current.thumb"
@@ -187,12 +192,10 @@
                     </button>
                 </div>
 
-                {{-- caption --}}
                 <div class="px-5 pt-4 text-center sm:px-8">
                     <p class="mx-auto max-w-2xl text-sm text-white/70" x-text="current?.alt"></p>
                 </div>
 
-                {{-- thumbnail strip --}}
                 <div x-show="hasMultiple" class="overflow-x-auto px-5 py-4 sm:px-8">
                     <div class="mx-auto flex w-max gap-2">
                         <template x-for="(img, i) in images" :key="i">
@@ -220,6 +223,18 @@
 
             {{-- LEFT: identity + facts --}}
             <div class="min-w-0">
+
+                {{-- Set by the booking redirect when it bounces a guest back:
+                     dates taken while they were deciding, or checkout misconfigured. --}}
+                @if (session('checkout_error'))
+                    <div class="mb-6 flex items-start gap-2.5 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-200">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mt-0.5 shrink-0">
+                            <circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>
+                        </svg>
+                        <span>{{ session('checkout_error') }}</span>
+                    </div>
+                @endif
+
                 @if ($degraded)
                     <div class="mb-6 flex items-start gap-2.5 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-200">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mt-0.5 shrink-0">
@@ -276,7 +291,7 @@
                         <h2 class="font-display text-2xl font-medium text-ink-900">Availability &amp; nightly rates</h2>
                         <span class="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wide text-tide-500">
                             <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-500"></span>
-                            <span x-text="loading ? 'Loading rates…' : 'Live Prices'"></span>
+                            <span x-text="loading ? 'Loading rates…' : 'Live prices'"></span>
                         </span>
                     </div>
 
@@ -304,7 +319,8 @@
                                     <p class="mb-3 text-center font-display text-base text-ink-900" x-text="monthLabel(offset)"></p>
 
                                     {{-- Per-month spinner: paging into an unfetched month
-                                         shows progress on that month only. --}}
+                                         shows progress on that month only, leaving the
+                                         already-loaded one interactive. --}}
                                     <div x-show="monthLoading(offset)" x-cloak
                                          class="absolute inset-x-0 bottom-0 top-8 z-10 grid place-items-center rounded-xl bg-fog-50/80 backdrop-blur-[1px]">
                                         <div class="text-center">
@@ -333,7 +349,7 @@
                                                     :class="{
                                                         'border-transparent text-fog-300 cursor-not-allowed': cell.isPast,
                                                         'border-transparent text-tide-300 line-through decoration-1 cursor-not-allowed': cell.isBooked,
-                                                        'border-transparent text-tide-400 cursor-not-allowed relative': cell.blockedStart,
+                                                        'border-transparent text-tide-400 cursor-not-allowed': cell.blockedStart,
                                                         'border-fog-200 bg-white text-ink-800 hover:border-brand-400 hover:bg-brand-50 cursor-pointer': !cell.disabled && !cell.isArrival && !cell.isDeparture && !cell.inRange,
                                                         'border-brand-600 bg-brand-600 text-white shadow-md shadow-brand-600/25': cell.isArrival || cell.isDeparture,
                                                         'border-brand-100 bg-brand-50 text-brand-800': (cell.inRange || cell.inHover) && !cell.isArrival && !cell.isDeparture,
@@ -346,8 +362,8 @@
                                                           x-text="priceLabel(cell.price)"></span>
 
                                                     {{-- Free night, but too short a gap to satisfy the
-                                                         minimum stay — cross it out so it never reads
-                                                         as a selectable check-in date. --}}
+                                                         minimum stay — crossed out so it never reads as
+                                                         a selectable check-in date. --}}
                                                     <span x-show="cell.blockedStart" x-cloak
                                                           class="pointer-events-none absolute inset-0 grid place-items-center">
                                                         <svg viewBox="0 0 40 40" class="h-full w-full text-fog-300" aria-hidden="true">
@@ -426,7 +442,7 @@
                             </div>
                         </template>
 
-                        {{-- Something broke on our side — do not blame the cottage --}}
+                        {{-- Something broke on our side — never blame the cottage --}}
                         <template x-if="!quoteLoading && quoteFailed">
                             <div class="flex items-start gap-2.5 py-3">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mt-0.5 shrink-0 text-tide-400">
@@ -446,7 +462,7 @@
                             <div>
                                 <div class="space-y-2.5 text-sm">
                                     {{-- One line per rate period, so a stay spanning a season
-                                         change itemises correctly instead of averaging. --}}
+                                         change itemises rather than averaging. --}}
                                     <template x-for="seg in segments" :key="seg.start">
                                         <div class="flex justify-between gap-3">
                                             <span class="text-tide-600">
@@ -489,7 +505,7 @@
                                                     <span x-text="addon.name"></span>
                                                     <em class="not-italic text-[11px] text-tide-400"
                                                         x-text="addonQtyLabel(addon)
-                                                                ? '(' + money(addon.price) + ' × ' + addonQtyLabel(addon) + ')'
+                                                                ? '(' + money(addon.price) + ' ' + addonQtyLabel(addon) + ')'
                                                                 : ''"></em>
                                                 </span>
                                                 <span class="font-medium text-ink-900" x-text="money(addonCost(addon))"></span>
@@ -532,10 +548,6 @@
                                         </template>
                                     </div>
                                 </template>
-
-                                <p class="mt-3 text-[11px] text-tide-500">
-                                    Computed live by Lodgify for your dates &mdash; includes active rate rules, taxes and fees.
-                                </p>
                             </div>
                         </template>
                     </div>
@@ -700,6 +712,12 @@
                             @endif
                         </div>
                     @endif
+
+                    <a href="{{ route('privacy') }}"
+                       class="mt-5 inline-flex items-center gap-1.5 text-sm font-medium text-brand-600 transition hover:gap-2.5">
+                        Read the full rental policies
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                    </a>
                 </div>
 
                 {{-- ========================================= 9. LOCATION --}}
@@ -739,7 +757,8 @@
                      off-screen on a short viewport --}}
                 <div class="sticky top-28 max-h-[calc(100vh-8rem)] overflow-y-auto" id="book">
                     <div class="rounded-3xl bg-white p-6 shadow-xl shadow-ink-900/10 ring-1 ring-black/5">
-                        {{-- price from --}}
+
+                        {{-- price --}}
                         <div class="flex items-baseline gap-1.5">
                             <template x-if="quote">
                                 <span class="font-display text-3xl font-medium text-ink-900"
@@ -762,7 +781,7 @@
                             </span>
                         </div>
 
-                        {{-- dates --}}
+                        {{-- dates + guests summary --}}
                         <div class="mt-5 overflow-hidden rounded-2xl ring-1 ring-fog-200">
                             <div class="grid grid-cols-2 divide-x divide-fog-200">
                                 <div class="p-3.5">
@@ -788,8 +807,8 @@
 
                         {{-- guest steppers --}}
                         <div x-show="arrival && departure" x-cloak class="mt-4 space-y-2.5">
-                            {{-- Caps come from Lodgify occupancy (rules.max_guests), so the
-                                 + button disables at capacity instead of failing at quote time. --}}
+                            {{-- Caps come from Lodgify occupancy (max_people), so + disables
+                                 at capacity instead of failing later at quote time. --}}
                             <template x-for="row in [
                                 { key:'adults', label:'Adults', min:1 },
                                 { key:'children', label:'Children', min:0 },
@@ -800,24 +819,23 @@
                                     <span class="text-sm text-tide-700" x-text="row.label"></span>
                                     <div class="flex items-center gap-2.5">
                                         <button type="button" @click="decGuest(row.key, row.min)" :disabled="$data[row.key] <= row.min"
-                                                class="grid h-7 w-7 place-items-center rounded-full ring-1 ring-fog-300 text-ink-800 transition hover:ring-brand-400 disabled:opacity-30">&minus;</button>
+                                                class="grid h-7 w-7 place-items-center rounded-full text-ink-800 ring-1 ring-fog-300 transition hover:ring-brand-400 disabled:opacity-30">&minus;</button>
                                         <span class="w-4 text-center text-sm font-medium" x-text="$data[row.key]"></span>
                                         <button type="button" @click="incGuest(row.key)" :disabled="!canInc(row.key)"
-                                                class="grid h-7 w-7 place-items-center rounded-full ring-1 ring-fog-300 text-ink-800 transition hover:ring-brand-400 disabled:opacity-30">+</button>
+                                                class="grid h-7 w-7 place-items-center rounded-full text-ink-800 ring-1 ring-fog-300 transition hover:ring-brand-400 disabled:opacity-30">+</button>
                                     </div>
                                 </div>
                             </template>
 
                             <p class="pt-1 font-mono text-[10px] text-tide-500" x-show="maxGuests">
                                 <span x-show="occupancyFull">Maximum occupancy reached</span>
-                                <span x-show="!occupancyFull"
-                                      x-text="'Sleeps up to ' + maxGuests + ' guests'"></span>
+                                <span x-show="!occupancyFull" x-text="'Sleeps up to ' + maxGuests + ' guests'"></span>
                             </p>
                         </div>
 
-                        {{-- add-ons: a summary row that opens a dialog.
-                             Four extras rendered inline made the panel taller
-                             than the viewport, hiding the Book button. --}}
+                        {{-- extras: a summary row that opens a dialog. Rendering four
+                             add-ons inline made this panel taller than the viewport
+                             and pushed the Book button out of reach. --}}
                         <div x-show="arrival && departure && hasAddons" x-cloak
                              class="mt-5 border-t border-fog-200 pt-4">
                             <button type="button" @click="openAddons($event.currentTarget)"
@@ -826,13 +844,9 @@
                                         ? 'bg-brand-50 ring-brand-200 hover:ring-brand-300'
                                         : 'ring-fog-200 hover:ring-brand-300'">
                                 <span class="min-w-0">
-                                    <span class="block font-mono text-[10px] uppercase tracking-wide text-tide-500">
-                                        Extras
-                                    </span>
-                                    <span class="mt-0.5 block truncate text-sm font-medium text-ink-900"
-                                          x-text="addonsSummary"></span>
+                                    <span class="block font-mono text-[10px] uppercase tracking-wide text-tide-500">Extras</span>
+                                    <span class="mt-0.5 block truncate text-sm font-medium text-ink-900" x-text="addonsSummary"></span>
                                 </span>
-
                                 <span class="flex shrink-0 items-center gap-2">
                                     <span x-show="addonsTotal > 0" x-cloak
                                           class="font-mono text-[11px] font-medium text-brand-700"
@@ -855,8 +869,7 @@
                                     <span class="text-sm font-medium text-ink-900" x-text="money(quote.total)"></span>
                                 </div>
 
-                                <div x-show="addonsTotal > 0" x-cloak
-                                     class="mt-1.5 flex items-center justify-between">
+                                <div x-show="addonsTotal > 0" x-cloak class="mt-1.5 flex items-center justify-between">
                                     <span class="text-sm text-tide-600">Extras</span>
                                     <span class="text-sm font-medium text-ink-900" x-text="money(addonsTotal)"></span>
                                 </div>
@@ -865,15 +878,21 @@
                                     <span class="font-display text-base text-ink-900">Total</span>
                                     <span class="font-display text-xl font-medium text-brand-700" x-text="money(grandTotal)"></span>
                                 </div>
-                                <a :href="'#breakdown'" class="mt-1 block text-[11px] text-brand-600 hover:underline">
+
+                                <a href="#breakdown" class="mt-1 block text-[11px] text-brand-600 hover:underline">
                                     See full breakdown
                                 </a>
+
                                 <button type="button" @click="book()"
                                         class="mt-4 w-full rounded-2xl bg-brand-600 py-3.5 text-sm font-semibold text-white transition hover:bg-brand-700">
                                     Book now
                                 </button>
-                                <p class="mt-2.5 text-center text-[10px] text-tide-500">
-                                    You won&rsquo;t be charged yet
+
+                                {{-- Accurate, not reassuring boilerplate: Lodgify's checkout
+                                     submits a request and takes payment only once we confirm. --}}
+                                <p class="mt-2.5 text-center text-[10px] leading-relaxed text-tide-500">
+                                    No payment now &mdash; we confirm availability first,
+                                    then arrange the deposit.
                                 </p>
                             </div>
                         </template>
@@ -894,7 +913,7 @@
         </div>
     </section>
 
-    {{-- ==================================== ADD-ONS DIALOG --}}
+    {{-- ======================================================= EXTRAS DIALOG --}}
     <template x-teleport="body">
         <div x-show="addonsOpen" x-cloak
              class="fixed inset-0 z-[90] flex items-end justify-center sm:items-center"
@@ -924,7 +943,7 @@
                     <div>
                         <h3 class="font-display text-xl font-medium text-ink-900">Add to your stay</h3>
                         <p class="mt-1 text-[11px] leading-snug text-tide-500">
-                            Requested at booking &mdash; confirmed by us before you arrive.
+                            Confirmed with you before arrival.
                         </p>
                     </div>
                     <button type="button" @click="closeAddons()" aria-label="Close"
@@ -980,38 +999,28 @@
                                     </div>
                                 </div>
 
-                                {{-- quantity dimensions, only where they apply --}}
-                                <div x-show="isSelected(addon) && hasSteppers(addon)" x-cloak
-                                     class="mt-4 grid gap-3 border-t border-brand-100/70 pt-4 sm:grid-cols-2">
-
-                                    <div x-show="needsPersons(addon)"
-                                         class="flex items-center justify-between rounded-xl bg-white/70 px-3 py-2">
-                                        <span class="font-mono text-[10px] uppercase tracking-wide text-tide-500">Guests</span>
-                                        <div class="flex items-center gap-2.5">
-                                            <button type="button" @click="decPersons(addon)"
-                                                    :disabled="state(addon).persons <= 1"
-                                                    class="grid h-7 w-7 place-items-center rounded-full ring-1 ring-fog-300 transition hover:ring-brand-400 disabled:opacity-30">&minus;</button>
-                                            <span class="w-5 text-center text-sm font-medium" x-text="state(addon).persons"></span>
-                                            <button type="button" @click="incPersons(addon)"
-                                                    :disabled="!canIncPersons(addon)"
-                                                    class="grid h-7 w-7 place-items-center rounded-full ring-1 ring-fog-300 transition hover:ring-brand-400 disabled:opacity-30">+</button>
-                                        </div>
-                                    </div>
-
-                                    <div x-show="needsNights(addon)"
-                                         class="flex items-center justify-between rounded-xl bg-white/70 px-3 py-2">
-                                        <span class="font-mono text-[10px] uppercase tracking-wide text-tide-500">Nights</span>
-                                        <div class="flex items-center gap-2.5">
-                                            <button type="button" @click="decNights(addon)"
-                                                    :disabled="state(addon).nights <= 1"
-                                                    class="grid h-7 w-7 place-items-center rounded-full ring-1 ring-fog-300 transition hover:ring-brand-400 disabled:opacity-30">&minus;</button>
-                                            <span class="w-5 text-center text-sm font-medium" x-text="state(addon).nights"></span>
-                                            <button type="button" @click="incNights(addon)"
-                                                    :disabled="!canIncNights(addon)"
-                                                    class="grid h-7 w-7 place-items-center rounded-full ring-1 ring-fog-300 transition hover:ring-brand-400 disabled:opacity-30">+</button>
-                                        </div>
+                                {{-- ONE quantity stepper, matching Lodgify's own checkout.
+                                     Lodgify applies the per-night multiplier itself, so a
+                                     nights stepper here would be double counted. --}}
+                                <div x-show="isSelected(addon) && hasStepper(addon)" x-cloak
+                                     class="mt-4 flex items-center justify-between rounded-xl bg-white/70 px-3 py-2">
+                                    <span class="font-mono text-[10px] uppercase tracking-wide text-tide-500">Quantity</span>
+                                    <div class="flex items-center gap-2.5">
+                                        <button type="button" @click="decAddon(addon)"
+                                                :disabled="state(addon).quantity <= 1"
+                                                class="grid h-7 w-7 place-items-center rounded-full ring-1 ring-fog-300 transition hover:ring-brand-400 disabled:opacity-30">&minus;</button>
+                                        <span class="w-5 text-center text-sm font-medium" x-text="state(addon).quantity"></span>
+                                        <button type="button" @click="incAddon(addon)"
+                                                :disabled="!canIncAddon(addon)"
+                                                class="grid h-7 w-7 place-items-center rounded-full ring-1 ring-fog-300 transition hover:ring-brand-400 disabled:opacity-30">+</button>
                                     </div>
                                 </div>
+
+                                <p x-show="isSelected(addon) && appliesPerNight(addon)" x-cloak
+                                   class="mt-2 font-mono text-[10px] text-tide-400">
+                                    Charged for each of your <span x-text="nights"></span>
+                                    <span x-text="nights === 1 ? 'night' : 'nights'"></span>.
+                                </p>
 
                                 <div x-show="isSelected(addon)" x-cloak
                                      class="mt-3 flex items-baseline justify-between">
@@ -1082,6 +1091,8 @@
                 Choose dates
             </a>
 
+            {{-- The sidebar does not exist at this width, so the dialog needs its
+                 own way in. --}}
             <button type="button" @click="openAddons($event.currentTarget)"
                     x-show="quote && hasAddons" x-cloak
                     aria-label="Add extras"

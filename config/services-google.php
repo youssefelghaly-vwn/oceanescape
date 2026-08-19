@@ -25,6 +25,13 @@ return [
         'place_id' => env('GOOGLE_PLACE_ID'),
 
         'cache_ttl' => (int) env('GOOGLE_REVIEWS_CACHE', 21600),   // 6 hours
+
+        // Words shown on a review card before "Read full review".
+        'excerpt_words' => (int) env('GOOGLE_EXCERPT_WORDS', 38),
+
+        // Place photos to pull. These are the LISTING's photos — the Places API
+        // does not expose photos attached to individual reviews.
+        'max_photos' => (int) env('GOOGLE_MAX_PHOTOS', 12),
     ],
 
 ];

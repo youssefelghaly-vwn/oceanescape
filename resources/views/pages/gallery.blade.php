@@ -7,10 +7,18 @@
             <h1 class="mt-3 font-display text-3xl font-medium leading-tight text-ink-900 sm:text-4xl">
                 Through our guests&rsquo; eyes
             </h1>
-            <p class="mt-4 max-w-xl text-base leading-relaxed text-tide-700">
-                Photographs sent in by people who&rsquo;ve stayed with us. Been before?
-                <a href="{{ route('photos.create') }}" class="font-medium text-brand-700 hover:underline">Add yours</a>.
-            </p>
+<div class="mt-6 flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <p class="max-w-xl text-base leading-relaxed text-tide-700">
+        Photographs sent in by people who&rsquo;ve stayed with us. Been before?
+    </p>
+    <a href="{{ route('photos.create') }}"
+       class="inline-flex shrink-0 items-center gap-2 rounded-full bg-brand-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-brand-700">
+        Add your photos
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M5 12h14M12 5l7 7-7 7"/>
+        </svg>
+    </a>
+</div>
 
             @if ($cottages->isNotEmpty())
                 <div class="mt-6 flex flex-wrap gap-2">

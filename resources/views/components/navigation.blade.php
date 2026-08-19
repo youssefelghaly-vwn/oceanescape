@@ -62,6 +62,11 @@ $navLinks = [
 ];
 
 $bookUrl = $to('availability.search', '/availability');
+
+// Shared classes so Sign in / My stays read as the same nav-link family as
+// the primary menu items above, just without the "current page" bolding.
+$authLinkClass = 'nav-link text-sm transition-colors duration-500';
+$authLinkColorAttr = "'text-ink-800 hover:text-brand-600' : 'text-white/90 hover:text-white'";
 @endphp
 
 <header x-data="{
@@ -128,6 +133,17 @@ window.addEventListener('scroll', () => scrolled = window.scrollY > 40, { passiv
                 </a>
 
                 @auth
+                    @if (!auth()->user()->isAdmin())
+                        <a href="{{ route('profile.index') }}"
+                            class="{{ $authLinkClass }}"
+                            :class="(scrolled || !transparent) ? {{ $authLinkColorAttr }}">My stays</a>
+                    @endif
+                @else
+                    <a href="{{ route('login') }}"
+                        class="{{ $authLinkClass }}"
+                        :class="(scrolled || !transparent) ? {{ $authLinkColorAttr }}">Sign in</a>
+                @endauth
+                {{-- @auth
                     @if (auth()->user()->isAdmin())
                         <a href="{{ route('admin.business-stays.index') }}"
                             class="font-mono text-[10px] uppercase tracking-wider transition-colors duration-500"
@@ -136,7 +152,7 @@ window.addEventListener('scroll', () => scrolled = window.scrollY > 40, { passiv
                             Admin
                         </a>
                     @endif
-                @endauth
+                @endauth --}}
 
                 <a href="{{ $bookUrl }}"
                     class="rounded-full bg-brand-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-brand-600/20 transition-all duration-300 hover:-translate-y-0.5 hover:bg-brand-700 hover:shadow-brand-600/30">
@@ -171,6 +187,24 @@ window.addEventListener('scroll', () => scrolled = window.scrollY > 40, { passiv
                         style="transition-delay: {{ $loop->index * 60 }}ms"
                         class="border-b border-fog-200 py-4 font-display text-3xl text-ink-900 transition-colors hover:text-brand-600">{{ $label }}</a>
                 @endforeach
+
+                @auth
+                    @if (!auth()->user()->isAdmin())
+                        <a href="{{ route('profile.index') }}" x-show="mobileOpen"
+                            x-transition:enter="transition ease-out duration-500"
+                            x-transition:enter-start="opacity-0 -translate-x-3"
+                            x-transition:enter-end="opacity-100 translate-x-0"
+                            style="transition-delay: {{ count($navLinks) * 60 }}ms"
+                            class="border-b border-fog-200 py-4 font-display text-3xl text-ink-900 transition-colors hover:text-brand-600">My stays</a>
+                    @endif
+                @else
+                    <a href="{{ route('login') }}" x-show="mobileOpen"
+                        x-transition:enter="transition ease-out duration-500"
+                        x-transition:enter-start="opacity-0 -translate-x-3"
+                        x-transition:enter-end="opacity-100 translate-x-0"
+                        style="transition-delay: {{ count($navLinks) * 60 }}ms"
+                        class="border-b border-fog-200 py-4 font-display text-3xl text-ink-900 transition-colors hover:text-brand-600">Sign in</a>
+                @endauth
             </div>
 
             <div class="flex flex-col gap-4 pt-8">

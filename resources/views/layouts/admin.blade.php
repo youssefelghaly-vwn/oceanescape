@@ -45,6 +45,7 @@
             <nav class="border-t border-fog-200 px-3 py-4 lg:border-t-0" :class="nav ? 'block' : 'hidden lg:block'">
                 @php
                     $links = [
+                        ['label' => 'Reservations', 'route' => 'admin.reservations.index'],
                         ['label' => 'Business stays', 'route' => 'admin.business-stays.index'],
                         ['label' => 'Messages', 'route' => 'admin.messages.index'],
                         ['label' => 'Guest photos', 'route' => 'admin.photos.index'],

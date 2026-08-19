@@ -17,7 +17,13 @@ use App\Http\Controllers\ContactController;
 use App\Http\Controllers\GalleryController;
 use App\Http\Controllers\GuestPhotoController;
 use App\Http\Controllers\ReviewController;
-
+use App\Http\Controllers\Admin\CheckoutIntentController;
+use App\Http\Controllers\BookingRedirectController;
+use App\Http\Controllers\Admin\ReservationController as AdminReservationController;
+use App\Http\Controllers\Auth\RegisterController;
+use App\Http\Controllers\ProfileController;
+use Illuminate\Foundation\Auth\EmailVerificationRequest;
+use Illuminate\Http\Request;
 Route::get('/',               [HomeController::class, 'index'])->name('home');
 Route::get('/cottages',       [CottageController::class, 'index'])->name('cottages.index');
 Route::get('/cottage/{slug}', [CottageController::class, 'show'])->name('cottage.show');
@@ -158,3 +164,61 @@ Route::middleware(['auth', 'admin'])
     Route::view('/privacy-and-policy', 'pages.privacy-and-policy')->name('privacy');
 
 Route::get('/reviews', [ReviewController::class, 'index'])->name('reviews');
+
+
+
+// Records the intent, then hands off to Lodgify's hosted checkout.
+Route::get('/book/{slug}', BookingRedirectController::class)
+    ->middleware('throttle:30,1')
+    ->name('booking.redirect');
+
+Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(function () {
+    Route::get('/checkouts', [CheckoutIntentController::class, 'index'])->name('checkouts.index');
+});
+
+
+
+// ------------------------------------------------------------ registration
+Route::middleware('guest')->group(function () {
+    Route::get('/register',  [RegisterController::class, 'create'])->name('register');
+    Route::post('/register', [RegisterController::class, 'store'])
+        ->middleware('throttle:6,1')
+        ->name('register.store');
+});
+
+// ------------------------------------------------------ email verification
+/*
+ * NOT OPTIONAL. Reservations are matched to a user by email address, so
+ * verification is what proves the inbox belongs to them. Without it, anyone
+ * could register with a past guest's address and read their booking history.
+ */
+Route::middleware('auth')->group(function () {
+    Route::get('/verify-email', fn () => view('auth.verify-email'))->name('verification.notice');
+
+    Route::get('/verify-email/{id}/{hash}', function (EmailVerificationRequest $request) {
+        $request->fulfill();
+        return redirect()->route('profile.index')->with('status', 'Email confirmed — here are your stays.');
+    })->middleware('signed')->name('verification.verify');
+
+    Route::post('/verify-email/send', function (Request $request) {
+        $request->user()->sendEmailVerificationNotification();
+        return back()->with('status', 'Verification link sent.');
+    })->middleware('throttle:6,1')->name('verification.send');
+});
+
+// ------------------------------------------------------------ guest profile
+Route::middleware(['auth', 'verified'])->group(function () {
+    Route::get('/my-stays',       [ProfileController::class, 'index'])->name('profile.index');
+    Route::get('/my-stays/{id}',  [ProfileController::class, 'show'])->name('profile.show');
+
+    Route::get('/account',           [ProfileController::class, 'edit'])->name('account.edit');
+    Route::patch('/account',         [ProfileController::class, 'update'])->name('account.update');
+    Route::put('/account/password',  [ProfileController::class, 'updatePassword'])->name('account.password');
+});
+
+// -------------------------------------------------------- admin reservations
+Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(function () {
+    Route::get('/reservations',        [AdminReservationController::class, 'index'])->name('reservations.index');
+    Route::post('/reservations/refresh',[AdminReservationController::class, 'refresh'])->name('reservations.refresh');
+    Route::get('/reservations/{id}',   [AdminReservationController::class, 'show'])->name('reservations.show');
+});

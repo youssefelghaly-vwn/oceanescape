@@ -35,4 +35,10 @@ return [
         ],
     ],
 
+    'google' => [
+        'maps_key'  => env('GOOGLE_MAPS_API_KEY'),
+        'place_id'  => env('GOOGLE_PLACE_ID'),
+        'cache_ttl' => (int) env('GOOGLE_REVIEWS_CACHE', 21600),
+    ],
+
 ];

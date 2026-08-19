@@ -1,7 +1,22 @@
-@props(['class' => ''])
+@props([
+    'class'      => '',
+    'arrival'    => null,
+    'departure'  => null,
+    'adults'     => 2,
+    'children'   => 0,
+    'pets'       => 0,
+])
 
 <div
-    x-data="bookingSearch()"
+    x-data="bookingSearch(@js([
+        'arrival'         => $arrival,
+        'departure'       => $departure,
+        'adults'          => $adults,
+        'children'        => $children,
+        'pets'            => $pets,
+        'searchUrl'       => url('/availability'),
+        'availabilityUrl' => url('/api/availability/month'),
+    ]))"
     @click.outside="open = false; guestsOpen = false"
     class="relative {{ $class }}"
 >

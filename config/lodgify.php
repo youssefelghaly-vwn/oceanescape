@@ -188,4 +188,21 @@ return [
     'availability_window_days' => (int) env('LODGIFY_AVAILABILITY_WINDOW', 90),
     'nearby_window_days'       => (int) env('LODGIFY_NEARBY_WINDOW', 14),
     'limited_threshold'        => (int) env('LODGIFY_LIMITED_THRESHOLD', 2),
+
+    'checkout_slug' => env('LODGIFY_CHECKOUT_SLUG', 'scott-seely'),
+
+    /*
+    | Currency for the checkout. Leave as CAD: passing something else makes the
+    | summary show a converted figure beside the rental's real price, which
+    | confuses more than it helps.
+    */
+    'checkout_currency' => env('LODGIFY_CHECKOUT_CURRENCY', 'CAD'),
+
+    /*
+    | How long a redirect stays "in flight" before it counts as abandoned.
+    | Lodgify's checkout is three steps, so allow a generous window.
+    */
+    'checkout_grace_minutes' => (int) env('LODGIFY_CHECKOUT_GRACE', 90),
+    'reservations' => (int) env('LODGIFY_CACHE_RESERVATIONS', 300),
+
 ];
