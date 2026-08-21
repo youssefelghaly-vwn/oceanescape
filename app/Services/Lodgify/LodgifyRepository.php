@@ -34,8 +34,43 @@ class LodgifyRepository
      */
     protected const CACHE_VERSION = 'v3';
 
+    /**
+     * Sentinel cached in place of a property payload when Lodgify says the property does
+     * not exist.
+     *
+     * It has to be a non-null ARRAY. Cache::remember() treats a cached null as a miss
+     * (`if (! is_null($value))`), and safe() returns null on failure — so a 404 was never
+     * cached and every phantom property was re-fetched on EVERY request, forever. That is
+     * what filled the log with the same 404 several times a second.
+     */
+    protected const MISSING = ['_lodgify_missing' => true];
+
     /** @var array<int, string> collected non-fatal errors from the last operation */
     protected array $lastErrors = [];
+
+    /**
+     * Property ids Lodgify's LIST endpoint returns but its DETAIL endpoint 404s.
+     *
+     * Real, and not transient: /v2/properties happily lists ids that
+     * /v2/properties/{id} answers with `"The property with identifier N does not exists"`
+     * (code 997) — deleted or otherwise orphaned records still in the index. Tracked per
+     * request so allCottages() can drop them instead of rendering a half-built cottage.
+     *
+     * @var array<int, true>
+     */
+    protected array $phantomProperties = [];
+
+    /** Key of the MISSING sentinel, so callers do not repeat the literal. */
+    protected const MISSING_KEY = '_lodgify_missing';
+
+    /**
+     * HTTP status of the most recent safe() failure, or null when it succeeded.
+     *
+     * Lets a caller distinguish "Lodgify says this does not exist" (404 — definitive, worth
+     * caching and acting on) from "we could not reach Lodgify" (timeout/5xx — retry later).
+     * safe() alone flattens both to null.
+     */
+    protected ?int $lastStatus = null;
 
     /**
      * The most recent guest-facing rejection from Lodgify, e.g.
@@ -55,6 +90,19 @@ class LodgifyRepository
     public function lastErrors(): array
     {
         return $this->lastErrors;
+    }
+
+    /**
+     * Property ids the list endpoint advertises but the detail endpoint 404s.
+     *
+     * Surfaced at /debug/lodgify so an operator can see which ids to clean up in Lodgify,
+     * rather than inferring it from the log.
+     *
+     * @return array<int, int>
+     */
+    public function phantomProperties(): array
+    {
+        return array_keys($this->phantomProperties);
     }
 
     /** Lodgify's own explanation for the last rejection, if it is fit to show. */
@@ -90,7 +138,7 @@ class LodgifyRepository
          */
         return collect($rawList ?? [])
             ->map(function ($listEntry) {
-                if (!is_array($listEntry)) {
+                if (! is_array($listEntry)) {
                     return null;
                 }
                 $id = (int) ($listEntry['id'] ?? 0);
@@ -101,6 +149,21 @@ class LodgifyRepository
                     ? $this->cottageRaw($id)
                     : null;
 
+                /*
+                 * DROP a property Lodgify says does not exist, rather than falling back to
+                 * the thin list entry.
+                 *
+                 * The fallback is right for a transient failure — better a cottage with a
+                 * cover image than no cottage. It is wrong for a phantom: the list payload
+                 * carries no `rooms[]`, so primaryRoomId() is null, which means no rate
+                 * calendar, no quote, and a booking payload with no room_type_id. A cottage
+                 * that renders but cannot be priced or booked is worse than one that is
+                 * simply absent.
+                 */
+                if (isset($this->phantomProperties[$id])) {
+                    return null;
+                }
+
                 return $this->mapCottage($merged ?: $listEntry);
             })
             ->filter()
@@ -110,6 +173,7 @@ class LodgifyRepository
     public function cottage(int $id): ?Cottage
     {
         $raw = $this->cottageRaw($id);
+
         return $raw ? $this->mapCottage($raw) : null;
     }
 
@@ -133,19 +197,38 @@ class LodgifyRepository
         $property = $this->rememberArray(
             "property:{$id}:raw",
             (int) config('lodgify.cache.property_detail'),
-            fn () => $this->safe("getProperty:{$id}", fn () => $this->client->getProperty($id))
+            function () use ($id) {
+                $result = $this->safe("getProperty:{$id}", fn () => $this->client->getProperty($id));
+
+                /*
+                 * A 404 is a DEFINITIVE answer — "this property does not exist" — not a
+                 * transient failure, so cache it. Returning null here would not be cached
+                 * at all (see the MISSING docblock) and we would re-ask forever.
+                 */
+                if ($result === null && $this->lastStatus === 404) {
+                    return self::MISSING;
+                }
+
+                return $result;
+            }
         );
 
-        if (!$property) {
+        if (($property[self::MISSING_KEY] ?? false) === true) {
+            $this->phantomProperties[$id] = true;
+
             return null;
         }
 
-        if (!config('lodgify.merge_room_data', true)) {
+        if (! $property) {
+            return null;
+        }
+
+        if (! config('lodgify.merge_room_data', true)) {
             return $property;
         }
 
         $roomId = $property['rooms'][0]['id'] ?? null;
-        if (!$roomId) {
+        if (! $roomId) {
             return $property;
         }
 
@@ -162,8 +245,8 @@ class LodgifyRepository
     }
 
     /**
-     * @param array<string,mixed> $property
-     * @param array<string,mixed> $room
+     * @param  array<string,mixed>  $property
+     * @param  array<string,mixed>  $room
      * @return array<string,mixed>
      */
     protected function mergePropertyAndRoom(array $property, array $room): array
@@ -185,7 +268,7 @@ class LodgifyRepository
 
         // Counts: only override when the room actually reports a non-zero.
         foreach (['bedrooms', 'bathrooms'] as $key) {
-            if (!empty($room[$key])) {
+            if (! empty($room[$key])) {
                 $merged[$key] = $room[$key];
             }
         }
@@ -199,7 +282,7 @@ class LodgifyRepository
         }
 
         // Pets: allowed if EITHER level says so.
-        $merged['pets_allowed'] = !empty($property['pets_allowed']) || !empty($room['pets_allowed']);
+        $merged['pets_allowed'] = ! empty($property['pets_allowed']) || ! empty($room['pets_allowed']);
 
         // Keep the room id available for downstream calls.
         $merged['_room_id'] = $room['id'] ?? null;
@@ -244,7 +327,7 @@ class LodgifyRepository
                         "getAvailability:{$cottage->id}",
                         fn () => $this->client->getAvailability($cottage->id, $startDate, $endDate)
                     );
-                    if (!empty($auth)) {
+                    if (! empty($auth)) {
                         return $auth;
                     }
                 }
@@ -285,7 +368,7 @@ class LodgifyRepository
                     return ['total' => 0, 'days' => [], 'errors' => ['no cottages returned by Lodgify']];
                 }
 
-                $days   = [];
+                $days = [];
                 $errors = [];
                 $succeeded = 0;
 
@@ -293,28 +376,33 @@ class LodgifyRepository
                     $calendar = $this->cottageAvailability($cottage, $startDate);
                     if (empty($calendar)) {
                         $errors[] = "no availability data for cottage {$cottage->id} ({$cottage->name})";
+
                         continue;
                     }
                     $succeeded++;
                     foreach ($calendar as $date => $day) {
                         $days[$date] ??= ['available' => 0, 'min_stay' => 999, 'ci' => false, 'co' => false];
-                        if (!empty($day['isAvailable'])) {
+                        if (! empty($day['isAvailable'])) {
                             $days[$date]['available']++;
                             $ms = (int) ($day['minimalStay'] ?? 1);
                             if ($ms > 0 && $ms < $days[$date]['min_stay']) {
                                 $days[$date]['min_stay'] = $ms;
                             }
                         }
-                        if (!empty($day['isCheckInAvailable']))  $days[$date]['ci'] = true;
-                        if (!empty($day['isCheckOutAvailable'])) $days[$date]['co'] = true;
+                        if (! empty($day['isCheckInAvailable'])) {
+                            $days[$date]['ci'] = true;
+                        }
+                        if (! empty($day['isCheckOutAvailable'])) {
+                            $days[$date]['co'] = true;
+                        }
                     }
                 }
 
                 // IMPORTANT: only count cottages we actually got data for, so a
                 // failed fetch doesn't make every day look "fully booked".
                 return [
-                    'total'  => $succeeded,
-                    'days'   => $days,
+                    'total' => $succeeded,
+                    'days' => $days,
                     'errors' => $errors,
                 ];
             }
@@ -336,7 +424,7 @@ class LodgifyRepository
     /** @return Collection<int, Cottage> */
     public function cottagesFreeFor(string $arrival, string $departure): Collection
     {
-        $cottages  = $this->allCottages();
+        $cottages = $this->allCottages();
         $startDate = min($arrival, Carbon::today()->toDateString());
 
         return $cottages->filter(function (Cottage $cottage) use ($arrival, $departure, $startDate) {
@@ -345,14 +433,15 @@ class LodgifyRepository
                 return false; // no data -> don't claim it's bookable
             }
             $cursor = Carbon::parse($arrival);
-            $end    = Carbon::parse($departure);
+            $end = Carbon::parse($departure);
             while ($cursor->lt($end)) {
                 $day = $days[$cursor->toDateString()] ?? null;
-                if (!$day || empty($day['isAvailable'])) {
+                if (! $day || empty($day['isAvailable'])) {
                     return false;
                 }
                 $cursor->addDay();
             }
+
             return true;
         })->values();
     }
@@ -370,7 +459,7 @@ class LodgifyRepository
         $matches = collect();
         for ($offset = 1; $offset <= $window; $offset++) {
             foreach ([-$offset, $offset] as $delta) {
-                $newArrival   = Carbon::parse($arrival)->addDays($delta);
+                $newArrival = Carbon::parse($arrival)->addDays($delta);
                 $newDeparture = $newArrival->copy()->addDays($nights);
                 if ($newArrival->isPast()) {
                     continue;
@@ -378,9 +467,9 @@ class LodgifyRepository
 
                 foreach ($this->cottagesFreeFor($newArrival->toDateString(), $newDeparture->toDateString()) as $cottage) {
                     $matches->push([
-                        'cottage'     => $cottage,
-                        'arrival'     => $newArrival->toDateString(),
-                        'departure'   => $newDeparture->toDateString(),
+                        'cottage' => $cottage,
+                        'arrival' => $newArrival->toDateString(),
+                        'departure' => $newDeparture->toDateString(),
                         'offset_days' => abs($delta),
                     ]);
                 }
@@ -407,7 +496,7 @@ class LodgifyRepository
      * `_source` records which endpoint answered, because the two have entirely
      * different shapes and the caller has to parse accordingly.
      *
-     * @param array<int, string|int> $addOnIds
+     * @param  array<int, string|int>  $addOnIds
      */
     public function quote(
         int $cottageId,
@@ -424,7 +513,7 @@ class LodgifyRepository
             $key,
             (int) config('lodgify.cache.quote'),
             function () use ($cottageId, $arrival, $departure, $adults, $children, $pets, $addOnIds) {
-                $cottage  = $this->cottage($cottageId);
+                $cottage = $this->cottage($cottageId);
                 $currency = $cottage?->currency ?? 'USD';
 
                 $authQuote = $this->safe(
@@ -435,8 +524,9 @@ class LodgifyRepository
                         $addOnIds,
                     )
                 );
-                if (!empty($authQuote)) {
+                if (! empty($authQuote)) {
                     $authQuote['_source'] = 'v2';
+
                     return $authQuote;
                 }
 
@@ -446,8 +536,9 @@ class LodgifyRepository
                         $cottageId, $arrival, $departure, $adults + $children, $currency
                     )
                 );
-                if (!empty($public)) {
+                if (! empty($public)) {
                     $public['_source'] = 'public';
+
                     return $public;
                 }
 
@@ -465,7 +556,7 @@ class LodgifyRepository
      * table. Hashing also bounds the key length, which matters because `cache.key` is a
      * primary key.
      *
-     * @param array<int, string|int> $addOnIds
+     * @param  array<int, string|int>  $addOnIds
      */
     protected function quoteCacheKey(
         int $cottageId,
@@ -480,7 +571,7 @@ class LodgifyRepository
             $arrival, $departure, $adults, $children, $pets, implode(',', $addOnIds),
         ]));
 
-        return "quote:v3:{$cottageId}:" . substr($fingerprint, 0, 24);
+        return "quote:v3:{$cottageId}:".substr($fingerprint, 0, 24);
     }
 
     /**
@@ -489,7 +580,7 @@ class LodgifyRepository
      * Used at the moment of booking: a 60s-stale price is fine for a display panel and
      * not fine for deciding what to charge a card.
      *
-     * @param array<int, string|int> $addOnIds
+     * @param  array<int, string|int>  $addOnIds
      */
     public function forgetQuote(
         int $cottageId,
@@ -502,11 +593,11 @@ class LodgifyRepository
     ): void {
         $key = $this->quoteCacheKey($cottageId, $arrival, $departure, $adults, $children, $pets, $addOnIds);
 
-        $tag     = (string) config('lodgify.cache_tag', 'lodgify');
-        $driver  = config('cache.default');
+        $tag = (string) config('lodgify.cache_tag', 'lodgify');
+        $driver = config('cache.default');
         $useTags = in_array($driver, ['redis', 'memcached'], true);
 
-        $versioned = self::CACHE_VERSION . ':' . $key;
+        $versioned = self::CACHE_VERSION.':'.$key;
 
         if ($useTags) {
             Cache::tags([$tag])->forget($versioned);
@@ -548,14 +639,15 @@ class LodgifyRepository
     {
         foreach ((array) config('lodgify.addon_strategies', ['api', 'manifest']) as $strategy) {
             $addons = match ($strategy) {
-                'api'      => $this->addonsFromApi($cottage),
+                'api' => $this->addonsFromApi($cottage),
                 'manifest' => $this->addonsFromManifest($cottage),
-                default    => [],
+                default => [],
             };
             if ($addons !== []) {
                 return $addons;
             }
         }
+
         return [];
     }
 
@@ -572,28 +664,28 @@ class LodgifyRepository
         }
 
         return collect($entries)
-            ->filter(fn ($e) => is_array($e) && !empty($e['name']))
+            ->filter(fn ($e) => is_array($e) && ! empty($e['name']))
             ->map(function (array $e) use ($cottage) {
                 [$perNight, $perGuest] = $this->addonChargeScaling($e);
                 $maxQty = (int) ($e['max_quantity'] ?? 0);
 
                 return [
-                    'id'           => (string) ($e['id'] ?? Str::slug($e['name'])),
-                    'name'         => trim((string) $e['name']),
-                    'description'  => isset($e['description']) ? trim((string) $e['description']) : null,
-                    'price'        => (float) ($e['price'] ?? 0),
-                    'currency'     => $e['currency'] ?? $cottage->currency ?? 'USD',
-                    'per_night'    => $perNight,
-                    'per_guest'    => $perGuest,
-                    'charge_type'  => $e['charge_type'] ?? null,
-                    'required'     => (bool) ($e['required'] ?? false),
+                    'id' => (string) ($e['id'] ?? Str::slug($e['name'])),
+                    'name' => trim((string) $e['name']),
+                    'description' => isset($e['description']) ? trim((string) $e['description']) : null,
+                    'price' => (float) ($e['price'] ?? 0),
+                    'currency' => $e['currency'] ?? $cottage->currency ?? 'USD',
+                    'per_night' => $perNight,
+                    'per_guest' => $perGuest,
+                    'charge_type' => $e['charge_type'] ?? null,
+                    'required' => (bool) ($e['required'] ?? false),
                     'max_quantity' => $maxQty > 0 ? $maxQty : 10,
-                    'image'        => isset($e['image']) && is_string($e['image'])
+                    'image' => isset($e['image']) && is_string($e['image'])
                                         ? (str_starts_with($e['image'], 'http') || str_starts_with($e['image'], '//')
                                             ? $this->normaliseImageUrl($e['image'])
                                             : asset(ltrim($e['image'], '/')))
                                         : null,
-                    'source'       => 'manifest',
+                    'source' => 'manifest',
                 ];
             })
             ->values()
@@ -614,13 +706,13 @@ class LodgifyRepository
             )
         );
 
-        if (empty($raw) || !is_array($raw)) {
+        if (empty($raw) || ! is_array($raw)) {
             return [];
         }
 
         // The v1 endpoint returns a bare list; tolerate an envelope too.
         $items = $raw;
-        if (!array_is_list($raw)) {
+        if (! array_is_list($raw)) {
             foreach (['addOns', 'addons', 'items', 'data', 'results'] as $key) {
                 if (isset($raw[$key]) && is_array($raw[$key])) {
                     $items = $raw[$key];
@@ -647,6 +739,7 @@ class LodgifyRepository
         if (array_key_exists('is_active', $raw)) {
             return (bool) $raw['is_active'];
         }
+
         return true;   // no status field: assume offered
     }
 
@@ -674,6 +767,7 @@ class LodgifyRepository
         }
         if ($name === null) {
             Log::info('Lodgify add-on skipped: no name', ['keys' => array_keys($raw)]);
+
             return null;
         }
 
@@ -695,7 +789,7 @@ class LodgifyRepository
         $imageUrl = $raw['image_url'] ?? $raw['image']['url'] ?? $raw['imageUrl'] ?? null;
 
         // "Fixed" vs a percentage-of-stay charge.
-        $rateType   = (string) ($raw['rate_type'] ?? $raw['rateType'] ?? 'Fixed');
+        $rateType = (string) ($raw['rate_type'] ?? $raw['rateType'] ?? 'Fixed');
         $percentage = $this->firstFloat($raw, ['percentage']);
 
         $currency = $raw['currency']['code']
@@ -705,21 +799,21 @@ class LodgifyRepository
             ?? 'USD';
 
         return [
-            'id'           => (string) ($raw['id'] ?? $raw['addon_id'] ?? Str::slug($name)),
-            'name'         => trim($name),
-            'description'  => $description !== null ? trim($description) : null,
-            'price'        => $price,
-            'currency'     => $currency,
-            'per_night'    => $perNight,
-            'per_guest'    => $perGuest,
-            'is_percentage'=> strcasecmp($rateType, 'Percentage') === 0 || $percentage !== null,
-            'percentage'   => $percentage,
-            'charge_type'  => $raw['charge_type'] ?? $raw['chargeType'] ?? null,
-            'frequency'    => $raw['frequency'] ?? null,
-            'required'     => $this->addonIsMandatory($raw),
+            'id' => (string) ($raw['id'] ?? $raw['addon_id'] ?? Str::slug($name)),
+            'name' => trim($name),
+            'description' => $description !== null ? trim($description) : null,
+            'price' => $price,
+            'currency' => $currency,
+            'per_night' => $perNight,
+            'per_guest' => $perGuest,
+            'is_percentage' => strcasecmp($rateType, 'Percentage') === 0 || $percentage !== null,
+            'percentage' => $percentage,
+            'charge_type' => $raw['charge_type'] ?? $raw['chargeType'] ?? null,
+            'frequency' => $raw['frequency'] ?? null,
+            'required' => $this->addonIsMandatory($raw),
             'max_quantity' => $maxQty,
-            'image'        => is_string($imageUrl) ? $this->normaliseImageUrl($imageUrl) : null,
-            'source'       => 'api',
+            'image' => is_string($imageUrl) ? $this->normaliseImageUrl($imageUrl) : null,
+            'source' => 'api',
         ];
     }
 
@@ -736,6 +830,7 @@ class LodgifyRepository
             }
         }
         $chargeType = strtolower((string) ($raw['charge_type'] ?? $raw['chargeType'] ?? ''));
+
         return str_contains($chargeType, 'mandatory') || str_contains($chargeType, 'compulsory');
     }
 
@@ -750,16 +845,16 @@ class LodgifyRepository
     protected function addonTranslation(array $raw): array
     {
         $translations = $raw['translations'] ?? null;
-        if (!is_array($translations) || $translations === []) {
+        if (! is_array($translations) || $translations === []) {
             return [null, null];
         }
 
         $locale = (string) config('lodgify.addons_locale', 'en');
         $chosen = $translations[$locale]
             ?? $translations[strtolower($locale)]
-            ?? collect($translations)->first(fn ($t) => is_array($t) && !empty($t['name']));
+            ?? collect($translations)->first(fn ($t) => is_array($t) && ! empty($t['name']));
 
-        if (!is_array($chosen)) {
+        if (! is_array($chosen)) {
             return [null, null];
         }
 
@@ -812,7 +907,7 @@ class LodgifyRepository
         ));
 
         // Either field may carry either signal, so test both for both.
-        $haystack = $chargeType . ' ' . $frequency;
+        $haystack = $chargeType.' '.$frequency;
 
         $perNight = str_contains($haystack, 'night') || str_contains($haystack, 'day');
         $perGuest = str_contains($haystack, 'person') || str_contains($haystack, 'guest')
@@ -823,10 +918,10 @@ class LodgifyRepository
                       || str_contains($haystack, 'fixed') || str_contains($haystack, 'once')
                       || str_contains($haystack, 'booking');
 
-        if (!$recognised && $haystack !== ' ') {
+        if (! $recognised && $haystack !== ' ') {
             Log::info('Lodgify add-on: unrecognised charge_type/frequency, treating as one-off', [
                 'charge_type' => $raw['charge_type'] ?? null,
-                'frequency'   => $raw['frequency'] ?? null,
+                'frequency' => $raw['frequency'] ?? null,
             ]);
         }
 
@@ -846,25 +941,37 @@ class LodgifyRepository
      */
     protected function safe(string $context, \Closure $callback): mixed
     {
+        $this->lastStatus = null;
+
         try {
             return $callback();
         } catch (LodgifyApiException $e) {
+            $this->lastStatus = $e->status;
             $msg = "{$context}: HTTP {$e->status}";
             $this->lastErrors[] = $msg;
             // A 4xx often carries a reason worth repeating to the guest.
             $this->lastGuestMessage = $e->guestMessage() ?? $this->lastGuestMessage;
-            Log::warning("Lodgify call failed but was isolated [{$context}]", [
-                'status' => $e->status,
-                'body'   => mb_substr($e->responseBody, 0, 300),
-            ]);
+            /*
+             * assertOk() has already logged the upstream response. This line records that
+             * the failure was CONTAINED, which is the useful part. A 404 drops to info
+             * because it is an expected answer and the pair of lines was appearing several
+             * times a second for every phantom property.
+             */
+            Log::log($e->status === 404 ? 'info' : 'warning',
+                "Lodgify call failed but was isolated [{$context}]", [
+                    'status' => $e->status,
+                    'body' => mb_substr($e->responseBody, 0, 300),
+                ]);
+
             return null;
         } catch (\Throwable $e) {
             $msg = "{$context}: {$e->getMessage()}";
             $this->lastErrors[] = $msg;
             Log::warning("Lodgify call threw but was isolated [{$context}]", [
                 'exception' => $e::class,
-                'message'   => $e->getMessage(),
+                'message' => $e->getMessage(),
             ]);
+
             return null;
         }
     }
@@ -875,12 +982,12 @@ class LodgifyRepository
 
     protected function rememberArray(string $key, int $ttl, \Closure $callback): mixed
     {
-        $tag     = (string) config('lodgify.cache_tag', 'lodgify');
-        $driver  = config('cache.default');
+        $tag = (string) config('lodgify.cache_tag', 'lodgify');
+        $driver = config('cache.default');
         $useTags = in_array($driver, ['redis', 'memcached'], true);
 
-        $versioned    = self::CACHE_VERSION . ':' . $key;
-        $store        = $useTags ? Cache::tags([$tag]) : Cache::store();
+        $versioned = self::CACHE_VERSION.':'.$key;
+        $store = $useTags ? Cache::tags([$tag]) : Cache::store();
         $effectiveKey = $useTags ? $versioned : "{$tag}:{$versioned}";
 
         return $store->remember($effectiveKey, $ttl, function () use ($callback) {
@@ -888,19 +995,21 @@ class LodgifyRepository
             if (is_object($value)) {
                 throw new \LogicException(
                     'LodgifyRepository cache callback returned an object. Only '
-                    . 'arrays/scalars/null may be cached. Got: ' . get_class($value)
+                    .'arrays/scalars/null may be cached. Got: '.get_class($value)
                 );
             }
+
             return $value;
         });
     }
 
     public function flushCache(): void
     {
-        $tag    = (string) config('lodgify.cache_tag', 'lodgify');
+        $tag = (string) config('lodgify.cache_tag', 'lodgify');
         $driver = config('cache.default');
         if (in_array($driver, ['redis', 'memcached'], true)) {
             Cache::tags([$tag])->flush();
+
             return;
         }
         Cache::flush();
@@ -916,8 +1025,8 @@ class LodgifyRepository
 
         $roomsRaw = $raw['rooms'] ?? $raw['room_types'] ?? [];
         $rooms = collect($roomsRaw)->map(fn ($r) => [
-            'id'        => (int) ($r['id'] ?? 0),
-            'name'      => (string) ($r['name'] ?? ''),
+            'id' => (int) ($r['id'] ?? 0),
+            'name' => (string) ($r['name'] ?? ''),
             'maxGuests' => (int) ($r['max_people'] ?? $r['sleeps_max'] ?? $r['sleeps'] ?? 0),
         ])->all();
 
@@ -941,8 +1050,8 @@ class LodgifyRepository
          */
         $fromAmenities = $this->roomCountsFromAmenities($raw);
 
-        $bedrooms  = (int) ($raw['bedrooms']  ?? $raw['bedroom_count']  ?? 0)
-                     ?: ($fromAmenities['bedrooms']  ?? 0);
+        $bedrooms = (int) ($raw['bedrooms'] ?? $raw['bedroom_count'] ?? 0)
+                     ?: ($fromAmenities['bedrooms'] ?? 0);
         $bathrooms = (int) ($raw['bathrooms'] ?? $raw['bathroom_count'] ?? 0)
                      ?: ($fromAmenities['bathrooms'] ?? 0);
         if ($bedrooms === 0 && count($rooms) > 1) {
@@ -964,46 +1073,46 @@ class LodgifyRepository
         $images = $this->imageResolver->resolve($id, $slug, $apiImages);
 
         return new Cottage(
-            id:   $id,
+            id: $id,
             // Two cottages can share a name, so the id keeps slugs unique
             // and routable. Without it, duplicates are unreachable.
             slug: $this->uniqueSlug($raw['slug'] ?? $name, $id),
             name: $name,
-            description:      $this->firstString($raw, ['description', 'long_description', 'summary', 'text']),
+            description: $this->firstString($raw, ['description', 'long_description', 'summary', 'text']),
             shortDescription: $this->firstString($raw, ['short_description', 'summary', 'tagline']),
 
             addressLine: $addressString
                          ?? $this->firstString($address, ['street', 'address', 'line1', 'address_line_1'])
                          ?? $this->firstString($raw, ['street', 'address_line']),
-            city:        $address['city']     ?? $raw['city']     ?? null,
-            state:       $address['state']    ?? $address['region'] ?? $raw['state'] ?? null,
-            country:     $address['country']  ?? $raw['country']  ?? $raw['country_code'] ?? $address['country_code'] ?? null,
-            postalCode:  $address['postal_code'] ?? $address['zip'] ?? $raw['zip'] ?? $raw['postal_code'] ?? null,
-            latitude:    $this->firstFloat($raw, ['latitude', 'lat']) ?? $this->firstFloat($address, ['latitude', 'lat']),
-            longitude:   $this->firstFloat($raw, ['longitude', 'lng', 'lon']) ?? $this->firstFloat($address, ['longitude', 'lng', 'lon']),
+            city: $address['city'] ?? $raw['city'] ?? null,
+            state: $address['state'] ?? $address['region'] ?? $raw['state'] ?? null,
+            country: $address['country'] ?? $raw['country'] ?? $raw['country_code'] ?? $address['country_code'] ?? null,
+            postalCode: $address['postal_code'] ?? $address['zip'] ?? $raw['zip'] ?? $raw['postal_code'] ?? null,
+            latitude: $this->firstFloat($raw, ['latitude', 'lat']) ?? $this->firstFloat($address, ['latitude', 'lat']),
+            longitude: $this->firstFloat($raw, ['longitude', 'lng', 'lon']) ?? $this->firstFloat($address, ['longitude', 'lng', 'lon']),
 
-            bedrooms:     $bedrooms,
-            bathrooms:    $bathrooms,
-            maxGuests:    $maxGuests,
+            bedrooms: $bedrooms,
+            bathrooms: $bathrooms,
+            maxGuests: $maxGuests,
             propertyType: $this->firstString($raw, ['property_type', 'type', 'rental_type']),
-            sizeSqm:      isset($raw['area']) ? (int) $raw['area'] : (isset($raw['size']) ? (int) $raw['size'] : null),
+            sizeSqm: isset($raw['area']) ? (int) $raw['area'] : (isset($raw['size']) ? (int) $raw['size'] : null),
 
-            petFriendly:     (bool) ($raw['pets_allowed'] ?? $raw['pet_friendly'] ?? false),
-            smokingAllowed:  (bool) ($raw['smoking_allowed'] ?? false),
-            partiesAllowed:  (bool) ($raw['party_allowed'] ?? $raw['events_allowed'] ?? false),
+            petFriendly: (bool) ($raw['pets_allowed'] ?? $raw['pet_friendly'] ?? false),
+            smokingAllowed: (bool) ($raw['smoking_allowed'] ?? false),
+            partiesAllowed: (bool) ($raw['party_allowed'] ?? $raw['events_allowed'] ?? false),
             // `adults_only` is the field Lodgify actually sets.
-            childrenAllowed: !($raw['adults_only'] ?? false) && (bool) ($raw['children_allowed'] ?? true),
-            checkInTime:     $this->firstString($raw, ['check_in_time', 'checkin_time', 'in_out_max_date']),
-            checkOutTime:    $this->firstString($raw, ['check_out_time', 'checkout_time']),
-            minStay:         isset($raw['min_stay']) ? (int) $raw['min_stay'] : null,
-            maxStay:         isset($raw['max_stay']) ? (int) $raw['max_stay'] : null,
-            houseRules:      $this->extractHouseRules($raw),
+            childrenAllowed: ! ($raw['adults_only'] ?? false) && (bool) ($raw['children_allowed'] ?? true),
+            checkInTime: $this->firstString($raw, ['check_in_time', 'checkin_time', 'in_out_max_date']),
+            checkOutTime: $this->firstString($raw, ['check_out_time', 'checkout_time']),
+            minStay: isset($raw['min_stay']) ? (int) $raw['min_stay'] : null,
+            maxStay: isset($raw['max_stay']) ? (int) $raw['max_stay'] : null,
+            houseRules: $this->extractHouseRules($raw),
 
             heroImage: $images[0] ?? null,
-            images:    $images,
+            images: $images,
             imageAlts: $imageAlts,
 
-            rooms:            $rooms,
+            rooms: $rooms,
             /*
              * IMPORTANT: `min_price`/`max_price` are CURRENCY-CONVERTED by
              * Lodgify (we measured a consistent 0.8635 factor against the
@@ -1013,7 +1122,7 @@ class LodgifyRepository
             baseNightlyPrice: $this->firstFloat($raw, [
                 'original_min_price', 'price', 'rate', 'nightly_price', 'min_price',
             ]),
-            currency:         $raw['currency_code'] ?? $raw['currency'] ?? null,
+            currency: $raw['currency_code'] ?? $raw['currency'] ?? null,
 
             amenities: $this->extractAmenities($raw),
         );
@@ -1027,6 +1136,7 @@ class LodgifyRepository
                 return trim($v);
             }
         }
+
         return null;
     }
 
@@ -1038,6 +1148,7 @@ class LodgifyRepository
                 return (float) $v;
             }
         }
+
         return null;
     }
 
@@ -1061,7 +1172,7 @@ class LodgifyRepository
             }
             $group = $this->prettyAmenityGroup($group);
             $grouped[$group] ??= [];
-            if (!in_array($label, $grouped[$group], true)) {
+            if (! in_array($label, $grouped[$group], true)) {
                 $grouped[$group][] = $label;
             }
         };
@@ -1083,27 +1194,29 @@ class LodgifyRepository
          */
         foreach (['amenities', 'facilities', 'features'] as $key) {
             $bucket = $raw[$key] ?? null;
-            if (!is_array($bucket)) {
+            if (! is_array($bucket)) {
                 continue;
             }
 
             // keyed-by-category object (the real shape)
-            if (!array_is_list($bucket)) {
+            if (! array_is_list($bucket)) {
                 foreach ($bucket as $group => $items) {
-                    if (!is_array($items) || $items === []) {
+                    if (! is_array($items) || $items === []) {
                         continue;   // skip the empty categories
                     }
                     foreach ($items as $item) {
                         if (is_string($item)) {
                             $push((string) $group, $item);
+
                             continue;
                         }
-                        if (!is_array($item)) {
+                        if (! is_array($item)) {
                             continue;
                         }
                         $push((string) $group, $this->amenityLabel($item));
                     }
                 }
+
                 continue;
             }
 
@@ -1117,6 +1230,7 @@ class LodgifyRepository
                         foreach ($item['items'] as $sub) {
                             $push($group, is_array($sub) ? $this->amenityLabel($sub) : (string) $sub);
                         }
+
                         continue;
                     }
                     $push((string) ($item['group'] ?? $item['category'] ?? 'Features'), $this->amenityLabel($item));
@@ -1125,13 +1239,24 @@ class LodgifyRepository
         }
 
         // A few useful booleans Lodgify exposes outside the amenities object.
-        if (!empty($raw['has_wifi']))          $push('entertainment', 'Wi-Fi');
-        if (!empty($raw['has_parking']))       $push('parking', 'Parking available');
-        if (!empty($raw['pets_allowed']))      $push('policies', 'Pets allowed');
-        if (!empty($raw['breakfast_included'])) $push('cooking', 'Breakfast included');
-        if (!empty($raw['has_meal_plan']))     $push('cooking', 'Meal plan available');
+        if (! empty($raw['has_wifi'])) {
+            $push('entertainment', 'Wi-Fi');
+        }
+        if (! empty($raw['has_parking'])) {
+            $push('parking', 'Parking available');
+        }
+        if (! empty($raw['pets_allowed'])) {
+            $push('policies', 'Pets allowed');
+        }
+        if (! empty($raw['breakfast_included'])) {
+            $push('cooking', 'Breakfast included');
+        }
+        if (! empty($raw['has_meal_plan'])) {
+            $push('cooking', 'Meal plan available');
+        }
 
         ksort($grouped);
+
         return $grouped;
     }
 
@@ -1146,6 +1271,7 @@ class LodgifyRepository
         $text = trim((string) ($item['text'] ?? ''));
         if ($text !== '') {
             $bracket = trim((string) ($item['bracket'] ?? ''));
+
             return $bracket !== '' ? "{$text} ({$bracket})" : $text;
         }
 
@@ -1155,7 +1281,7 @@ class LodgifyRepository
             return null;
         }
         $readable = trim(preg_replace('/(?<!^)[A-Z]/', ' $0', $name) ?? $name);
-        $prefix   = trim((string) ($item['prefix'] ?? ''));
+        $prefix = trim((string) ($item['prefix'] ?? ''));
 
         return $prefix !== '' && is_numeric($prefix)
             ? "{$prefix} {$readable}"
@@ -1170,21 +1296,22 @@ class LodgifyRepository
             return 'Features';
         }
         $map = [
-            'room'          => 'Rooms',
-            'livingroom'    => 'Living Room',
-            'further-info'  => 'Good to Know',
+            'room' => 'Rooms',
+            'livingroom' => 'Living Room',
+            'further-info' => 'Good to Know',
             'miscellaneous' => 'Other',
-            'sanitary'      => 'Bathroom',
-            'cooking'       => 'Kitchen & Dining',
+            'sanitary' => 'Bathroom',
+            'cooking' => 'Kitchen & Dining',
             'entertainment' => 'Entertainment & Internet',
-            'heating'       => 'Heating & Cooling',
-            'outside'       => 'Outdoors',
-            'sleeping'      => 'Sleeping',
-            'laundry'       => 'Laundry',
-            'parking'       => 'Parking',
-            'policies'      => 'Policies',
+            'heating' => 'Heating & Cooling',
+            'outside' => 'Outdoors',
+            'sleeping' => 'Sleeping',
+            'laundry' => 'Laundry',
+            'parking' => 'Parking',
+            'policies' => 'Policies',
         ];
         $key = strtolower($group);
+
         return $map[$key] ?? Str::headline(str_replace('-', ' ', $group));
     }
 
@@ -1197,19 +1324,19 @@ class LodgifyRepository
     protected function roomCountsFromAmenities(array $raw): array
     {
         $amenities = $raw['amenities'] ?? null;
-        if (!is_array($amenities)) {
+        if (! is_array($amenities)) {
             return [];
         }
 
         $out = [];
         $scan = function (array $items) use (&$out) {
             foreach ($items as $item) {
-                if (!is_array($item)) {
+                if (! is_array($item)) {
                     continue;
                 }
-                $name   = (string) ($item['name'] ?? '');
+                $name = (string) ($item['name'] ?? '');
                 $prefix = $item['prefix'] ?? null;
-                if (!is_numeric($prefix)) {
+                if (! is_numeric($prefix)) {
                     continue;
                 }
                 if (stripos($name, 'bedroom') !== false) {
@@ -1235,6 +1362,7 @@ class LodgifyRepository
 
     /**
      * Free-text house rules, split into individual lines where possible.
+     *
      * @return string[]
      */
     protected function extractHouseRules(array $raw): array
@@ -1244,6 +1372,7 @@ class LodgifyRepository
             return [];
         }
         $clean = strip_tags(str_replace(['<br>', '<br/>', '<br />', '</p>', '</li>'], "\n", $text));
+
         return collect(preg_split('/\r\n|\r|\n|•|\u{2022}/u', $clean))
             ->map(fn ($l) => trim(html_entity_decode($l)))
             ->filter(fn ($l) => $l !== '' && mb_strlen($l) > 2)
@@ -1282,7 +1411,7 @@ class LodgifyRepository
         $pairs = [];
 
         $add = function (?string $url, ?string $alt) use (&$pairs) {
-            if (!is_string($url) || trim($url) === '') {
+            if (! is_string($url) || trim($url) === '') {
                 return;
             }
             $normalised = $this->normaliseImageUrl($url);
@@ -1296,14 +1425,15 @@ class LodgifyRepository
             foreach ((array) ($raw[$key] ?? []) as $item) {
                 if (is_string($item)) {
                     $add($item, null);
+
                     continue;
                 }
-                if (!is_array($item)) {
+                if (! is_array($item)) {
                     continue;
                 }
                 $url = null;
                 foreach (['url', 'original_url', 'image_url', 'src', 'path', 'thumbnail_url', 'big_url'] as $k) {
-                    if (!empty($item[$k]) && is_string($item[$k])) {
+                    if (! empty($item[$k]) && is_string($item[$k])) {
                         $url = $item[$k];
                         break;
                     }
@@ -1313,13 +1443,13 @@ class LodgifyRepository
         }
 
         foreach (['image_url', 'main_image_url', 'thumbnail_url', 'thumbnail', 'cover_image'] as $key) {
-            if (!empty($raw[$key]) && is_string($raw[$key])) {
+            if (! empty($raw[$key]) && is_string($raw[$key])) {
                 $add($raw[$key], null);
             }
         }
 
         foreach ((array) ($raw['rooms'] ?? $raw['room_types'] ?? []) as $room) {
-            if (!is_array($room)) {
+            if (! is_array($room)) {
                 continue;
             }
             foreach ((array) ($room['images'] ?? []) as $item) {
@@ -1328,7 +1458,7 @@ class LodgifyRepository
                 } elseif (is_array($item)) {
                     $url = null;
                     foreach (['url', 'original_url', 'image_url', 'src', 'path'] as $k) {
-                        if (!empty($item[$k]) && is_string($item[$k])) {
+                        if (! empty($item[$k]) && is_string($item[$k])) {
                             $url = $item[$k];
                             break;
                         }
@@ -1355,7 +1485,7 @@ class LodgifyRepository
                     $candidates[] = $item;
                 } elseif (is_array($item)) {
                     foreach (['url', 'original_url', 'image_url', 'src', 'path', 'thumbnail_url', 'big_url'] as $k) {
-                        if (!empty($item[$k]) && is_string($item[$k])) {
+                        if (! empty($item[$k]) && is_string($item[$k])) {
                             $candidates[] = $item[$k];
                             break;
                         }
@@ -1366,14 +1496,14 @@ class LodgifyRepository
 
         // b) single-image fields on the property
         foreach (['image_url', 'main_image_url', 'thumbnail_url', 'thumbnail', 'cover_image'] as $key) {
-            if (!empty($raw[$key]) && is_string($raw[$key])) {
+            if (! empty($raw[$key]) && is_string($raw[$key])) {
                 $candidates[] = $raw[$key];
             }
         }
 
         // c) images nested under room types
         foreach ((array) ($raw['rooms'] ?? $raw['room_types'] ?? []) as $room) {
-            if (!is_array($room)) {
+            if (! is_array($room)) {
                 continue;
             }
             foreach ((array) ($room['images'] ?? []) as $item) {
@@ -1381,7 +1511,7 @@ class LodgifyRepository
                     $candidates[] = $item;
                 } elseif (is_array($item)) {
                     foreach (['url', 'original_url', 'image_url', 'src', 'path'] as $k) {
-                        if (!empty($item[$k]) && is_string($item[$k])) {
+                        if (! empty($item[$k]) && is_string($item[$k])) {
                             $candidates[] = $item[$k];
                             break;
                         }
@@ -1420,20 +1550,20 @@ class LodgifyRepository
         }
 
         if (str_starts_with($url, '//')) {
-            $url = 'https:' . $url;
+            $url = 'https:'.$url;
         } elseif (str_starts_with($url, 'http://')) {
-            $url = 'https://' . substr($url, 7);
-        } elseif (!str_starts_with($url, 'https://')) {
-            $url = 'https://l.icdbcdn.com/' . ltrim($url, '/');
+            $url = 'https://'.substr($url, 7);
+        } elseif (! str_starts_with($url, 'https://')) {
+            $url = 'https://l.icdbcdn.com/'.ltrim($url, '/');
         }
 
         $size = config('lodgify.image_size_param');
         if ($size !== null && $size !== '' && str_contains($url, 'icdbcdn')) {
             // replace an existing f= preset, or append one
             if (preg_match('/[?&]f=/', $url)) {
-                $url = preg_replace('/([?&])f=[^&]*/', '$1f=' . rawurlencode((string) $size), $url);
+                $url = preg_replace('/([?&])f=[^&]*/', '$1f='.rawurlencode((string) $size), $url);
             } else {
-                $url .= (str_contains($url, '?') ? '&' : '?') . 'f=' . rawurlencode((string) $size);
+                $url .= (str_contains($url, '?') ? '&' : '?').'f='.rawurlencode((string) $size);
             }
         }
 
@@ -1454,21 +1584,21 @@ class LodgifyRepository
 
         $windows = [];
         $current = null;
-        $cursor  = Carbon::parse($from);
-        $end     = Carbon::parse($to);
+        $cursor = Carbon::parse($from);
+        $end = Carbon::parse($to);
 
         while ($cursor->lte($end)) {
-            $key  = $cursor->toDateString();
-            $day  = $days[$key] ?? null;
-            $free = $day && !empty($day['isAvailable']);
+            $key = $cursor->toDateString();
+            $day = $days[$key] ?? null;
+            $free = $day && ! empty($day['isAvailable']);
 
             if ($free) {
                 $minStay = (int) ($day['minimalStay'] ?? 1);
                 if ($current === null) {
                     $current = ['start' => $key, 'end' => $key, 'nights' => 1, 'min_stay' => max(1, $minStay)];
                 } else {
-                    $current['end']      = $key;
-                    $current['nights']  += 1;
+                    $current['end'] = $key;
+                    $current['nights'] += 1;
                     $current['min_stay'] = max($current['min_stay'], max(1, $minStay));
                 }
             } elseif ($current !== null) {
@@ -1505,8 +1635,8 @@ class LodgifyRepository
     {
         $parsed = $this->rateCalendarRaw($cottage, $startDate, $endDate);
 
-        $perDay   = $parsed['days']     ?? [];
-        $default  = $parsed['default']  ?? null;
+        $perDay = $parsed['days'] ?? [];
+        $default = $parsed['default'] ?? null;
         $settings = $parsed['settings'] ?? [];
         $currency = $settings['currency_code'] ?? $cottage->currency;
 
@@ -1517,33 +1647,33 @@ class LodgifyRepository
          * whole of next year look fully booked.
          */
         $availability = $this->cottageAvailability($cottage, $startDate, $endDate);
-        $seasons      = $this->seasons($cottage);
+        $seasons = $this->seasons($cottage);
 
-        $out    = collect();
+        $out = collect();
         $cursor = Carbon::parse($startDate);
-        $end    = Carbon::parse($endDate);
+        $end = Carbon::parse($endDate);
 
         while ($cursor->lte($end)) {
             $d = $cursor->toDateString();
 
             // Fall back to the default rate for days the calendar didn't cover.
-            $rate  = $perDay[$d] ?? $default;
-            $isDef = !isset($perDay[$d]) && $default !== null;
-            $av    = $availability[$d] ?? null;
+            $rate = $perDay[$d] ?? $default;
+            $isDef = ! isset($perDay[$d]) && $default !== null;
+            $av = $availability[$d] ?? null;
 
             $out->put($d, new RateDay(
-                date:            $d,
-                price:           $rate['price'] ?? null,
-                currency:        $currency,
-                available:       (bool) ($av['isAvailable'] ?? false),
-                checkInAllowed:  (bool) ($av['isCheckInAvailable'] ?? false),
+                date: $d,
+                price: $rate['price'] ?? null,
+                currency: $currency,
+                available: (bool) ($av['isAvailable'] ?? false),
+                checkInAllowed: (bool) ($av['isCheckInAvailable'] ?? false),
                 checkOutAllowed: (bool) ($av['isCheckOutAvailable'] ?? false),
                 // Prefer the rate calendar's min stay: it is what Lodgify
                 // actually enforces at checkout for that specific night.
-                minStay:         (int) ($rate['min_stay'] ?? $av['minimalStay'] ?? 1),
-                maxStay:         isset($rate['max_stay']) ? (int) $rate['max_stay'] : null,
-                seasonName:      $this->seasonNameFor($seasons, $d),
-                isDefaultRate:   $isDef,
+                minStay: (int) ($rate['min_stay'] ?? $av['minimalStay'] ?? 1),
+                maxStay: isset($rate['max_stay']) ? (int) $rate['max_stay'] : null,
+                seasonName: $this->seasonNameFor($seasons, $d),
+                isDefaultRate: $isDef,
                 pricePerAdditionalGuest: $rate['extra_guest_price'] ?? null,
                 additionalGuestsStartFrom: $rate['extra_guest_from'] ?? null,
             ));
@@ -1563,7 +1693,7 @@ class LodgifyRepository
     public function rateSettings(Cottage $cottage, ?string $startDate = null, ?string $endDate = null): array
     {
         $startDate ??= Carbon::today()->toDateString();
-        $endDate   ??= Carbon::today()->addDays((int) config('lodgify.availability_window_days', 90))->toDateString();
+        $endDate ??= Carbon::today()->addDays((int) config('lodgify.availability_window_days', 90))->toDateString();
 
         return $this->rateCalendarRaw($cottage, $startDate, $endDate)['settings'] ?? [];
     }
@@ -1587,6 +1717,7 @@ class LodgifyRepository
                         $cottage->id, $startDate, $endDate, $cottage->primaryRoomId()
                     )
                 );
+
                 return $raw === null
                     ? ['days' => [], 'default' => null, 'settings' => []]
                     : $this->normaliseRateCalendar($raw);
@@ -1622,34 +1753,35 @@ class LodgifyRepository
     protected function normaliseRateCalendar(array $raw): array
     {
         // Unwrap: response may be the object itself, or a list of per-room-type objects.
-        $items    = null;
+        $items = null;
         $settings = [];
 
         if (isset($raw['calendar_items'])) {
-            $items    = $raw['calendar_items'];
+            $items = $raw['calendar_items'];
             $settings = $raw['rate_settings'] ?? [];
         } else {
             foreach ($raw as $entry) {
                 if (is_array($entry) && isset($entry['calendar_items'])) {
-                    $items    = $entry['calendar_items'];
+                    $items = $entry['calendar_items'];
                     $settings = $entry['rate_settings'] ?? [];
                     break;
                 }
             }
         }
 
-        if (!is_array($items)) {
+        if (! is_array($items)) {
             Log::info('Lodgify rates calendar: no calendar_items found', [
                 'top_level_keys' => array_keys($raw),
             ]);
+
             return ['days' => [], 'default' => null, 'settings' => $settings];
         }
 
-        $days    = [];
+        $days = [];
         $default = null;
 
         foreach ($items as $item) {
-            if (!is_array($item)) {
+            if (! is_array($item)) {
                 continue;
             }
 
@@ -1660,7 +1792,7 @@ class LodgifyRepository
 
             // date === null marks the default/fallback rate
             $date = $item['date'] ?? null;
-            if ($date === null || !empty($item['is_default'])) {
+            if ($date === null || ! empty($item['is_default'])) {
                 $default ??= $price;
                 if ($date === null) {
                     continue;
@@ -1672,8 +1804,8 @@ class LodgifyRepository
 
         if ($days === []) {
             Log::info('Lodgify rates calendar: parsed 0 priced days', [
-                'item_count'   => count($items),
-                'sample_item'  => is_array($items[1] ?? $items[0] ?? null) ? ($items[1] ?? $items[0]) : null,
+                'item_count' => count($items),
+                'sample_item' => is_array($items[1] ?? $items[0] ?? null) ? ($items[1] ?? $items[0]) : null,
             ]);
         }
 
@@ -1689,7 +1821,7 @@ class LodgifyRepository
     {
         // Nested (the real shape)
         $prices = $item['prices'] ?? null;
-        $block  = null;
+        $block = null;
 
         if (is_array($prices) && $prices !== []) {
             // Multiple entries can exist for guest-count tiers; the first is the base.
@@ -1711,11 +1843,11 @@ class LodgifyRepository
         }
 
         return [
-            'price'             => $price,
-            'min_stay'          => isset($block['min_stay']) ? (int) $block['min_stay'] : null,
-            'max_stay'          => isset($block['max_stay']) ? (int) $block['max_stay'] : null,
+            'price' => $price,
+            'min_stay' => isset($block['min_stay']) ? (int) $block['min_stay'] : null,
+            'max_stay' => isset($block['max_stay']) ? (int) $block['max_stay'] : null,
             'extra_guest_price' => $this->firstFloat($block, ['price_per_additional_guest']),
-            'extra_guest_from'  => isset($block['additional_guests_starts_from'])
+            'extra_guest_from' => isset($block['additional_guests_starts_from'])
                                      ? (int) $block['additional_guests_starts_from'] : null,
         ];
     }
@@ -1736,7 +1868,7 @@ class LodgifyRepository
                     "getRateSettings:{$cottage->id}",
                     fn () => $this->client->getRateSettings($cottage->id)
                 );
-                if (!empty($auth)) {
+                if (! empty($auth)) {
                     return ['source' => 'auth', 'data' => $auth];
                 }
                 // public per-property rates (shape captured from the browser)
@@ -1744,6 +1876,7 @@ class LodgifyRepository
                     "getPublicRates:{$cottage->id}",
                     fn () => $this->client->getPublicRates($cottage->id)
                 );
+
                 return ['source' => 'public', 'data' => $pub ?? []];
             }
         ) ?? [];
@@ -1760,38 +1893,38 @@ class LodgifyRepository
         $roomTypes = $data['roomTypes'] ?? null;
         if (is_array($roomTypes)) {
             foreach ($roomTypes as $rt) {
-                if (!is_array($rt)) {
+                if (! is_array($rt)) {
                     continue;
                 }
                 $currency = $rt['defaultRate']['currency'] ?? $cottage->currency;
 
                 foreach ((array) ($rt['rates'] ?? []) as $r) {
-                    if (!is_array($r)) {
+                    if (! is_array($r)) {
                         continue;
                     }
                     $seasons->push(new RateSeason(
-                        name:     (string) ($r['name'] ?? 'Season'),
-                        start:    $r['startDate'] ?? $r['start_date'] ?? $r['start'] ?? null,
-                        end:      $r['endDate']   ?? $r['end_date']   ?? $r['end']   ?? null,
-                        nightly:  $this->firstFloat($r, ['dailyPrice', 'daily_price', 'price_per_day', 'price']),
-                        weekly:   $this->firstFloat($r, ['weeklyPrice', 'weekly_price']),
-                        monthly:  $this->firstFloat($r, ['monthlyPrice', 'monthly_price']),
-                        minStay:  isset($r['minStay']) ? (int) $r['minStay'] : (isset($r['min_stay']) ? (int) $r['min_stay'] : null),
+                        name: (string) ($r['name'] ?? 'Season'),
+                        start: $r['startDate'] ?? $r['start_date'] ?? $r['start'] ?? null,
+                        end: $r['endDate'] ?? $r['end_date'] ?? $r['end'] ?? null,
+                        nightly: $this->firstFloat($r, ['dailyPrice', 'daily_price', 'price_per_day', 'price']),
+                        weekly: $this->firstFloat($r, ['weeklyPrice', 'weekly_price']),
+                        monthly: $this->firstFloat($r, ['monthlyPrice', 'monthly_price']),
+                        minStay: isset($r['minStay']) ? (int) $r['minStay'] : (isset($r['min_stay']) ? (int) $r['min_stay'] : null),
                         currency: $r['currency'] ?? $currency,
                     ));
                 }
 
-                if (!empty($rt['defaultRate'])) {
+                if (! empty($rt['defaultRate'])) {
                     $d = $rt['defaultRate'];
                     $seasons->push(new RateSeason(
-                        name:      (string) ($d['name'] ?? 'Standard price'),
-                        start:     null,
-                        end:       null,
-                        nightly:   $this->firstFloat($d, ['dailyPrice', 'daily_price', 'price']),
-                        weekly:    $this->firstFloat($d, ['weeklyPrice', 'weekly_price']),
-                        monthly:   $this->firstFloat($d, ['monthlyPrice', 'monthly_price']),
-                        minStay:   isset($d['minStay']) ? (int) $d['minStay'] : null,
-                        currency:  $d['currency'] ?? $currency,
+                        name: (string) ($d['name'] ?? 'Standard price'),
+                        start: null,
+                        end: null,
+                        nightly: $this->firstFloat($d, ['dailyPrice', 'daily_price', 'price']),
+                        weekly: $this->firstFloat($d, ['weeklyPrice', 'weekly_price']),
+                        monthly: $this->firstFloat($d, ['monthlyPrice', 'monthly_price']),
+                        minStay: isset($d['minStay']) ? (int) $d['minStay'] : null,
+                        currency: $d['currency'] ?? $currency,
                         isDefault: true,
                     ));
                 }
@@ -1802,7 +1935,7 @@ class LodgifyRepository
         if ($seasons->isEmpty()) {
             $candidates = [];
             foreach ($data as $entry) {
-                if (!is_array($entry)) {
+                if (! is_array($entry)) {
                     continue;
                 }
                 foreach (['seasons', 'rates', 'rate_settings', 'periods'] as $k) {
@@ -1815,7 +1948,7 @@ class LodgifyRepository
                 }
             }
             foreach ($candidates as $r) {
-                if (!is_array($r)) {
+                if (! is_array($r)) {
                     continue;
                 }
                 $nightly = $this->firstFloat($r, ['price_per_day', 'daily_price', 'dailyPrice', 'price', 'rate']);
@@ -1823,13 +1956,13 @@ class LodgifyRepository
                     continue;
                 }
                 $seasons->push(new RateSeason(
-                    name:     (string) ($r['name'] ?? 'Season'),
-                    start:    $r['start_date'] ?? $r['startDate'] ?? $r['start'] ?? null,
-                    end:      $r['end_date']   ?? $r['endDate']   ?? $r['end']   ?? null,
-                    nightly:  $nightly,
-                    weekly:   $this->firstFloat($r, ['price_per_week', 'weekly_price', 'weeklyPrice']),
-                    monthly:  $this->firstFloat($r, ['price_per_month', 'monthly_price', 'monthlyPrice']),
-                    minStay:  isset($r['min_stay']) ? (int) $r['min_stay'] : null,
+                    name: (string) ($r['name'] ?? 'Season'),
+                    start: $r['start_date'] ?? $r['startDate'] ?? $r['start'] ?? null,
+                    end: $r['end_date'] ?? $r['endDate'] ?? $r['end'] ?? null,
+                    nightly: $nightly,
+                    weekly: $this->firstFloat($r, ['price_per_week', 'weekly_price', 'weeklyPrice']),
+                    monthly: $this->firstFloat($r, ['price_per_month', 'monthly_price', 'monthlyPrice']),
+                    minStay: isset($r['min_stay']) ? (int) $r['min_stay'] : null,
                     currency: $r['currency'] ?? $cottage->currency,
                 ));
             }
@@ -1845,13 +1978,14 @@ class LodgifyRepository
     protected function seasonNameFor(Collection $seasons, string $date): ?string
     {
         foreach ($seasons as $s) {
-            if ($s->isDefault || !$s->start || !$s->end) {
+            if ($s->isDefault || ! $s->start || ! $s->end) {
                 continue;
             }
             if ($date >= $s->start && $date <= $s->end) {
                 return $s->name;
             }
         }
+
         return $seasons->firstWhere('isDefault', true)?->name;
     }
 
@@ -1866,7 +2000,7 @@ class LodgifyRepository
     {
         $daysAhead ??= (int) config('lodgify.availability_window_days', 90);
         $from = Carbon::today()->toDateString();
-        $to   = Carbon::today()->addDays($daysAhead)->toDateString();
+        $to = Carbon::today()->addDays($daysAhead)->toDateString();
 
         return $this->allCottages()->map(fn (Cottage $c) => [
             'cottage' => $c,
@@ -1887,7 +2021,7 @@ class LodgifyRepository
     {
         $requestedArrival = Carbon::parse($arrival);
         $from = $requestedArrival->copy()->subDays($window)->max(Carbon::today())->toDateString();
-        $to   = Carbon::parse($departure)->addDays($window)->toDateString();
+        $to = Carbon::parse($departure)->addDays($window)->toDateString();
 
         $out = collect();
 
@@ -1895,7 +2029,7 @@ class LodgifyRepository
             $best = null;
             foreach ($this->freeWindows($cottage, $from, $to) as $w) {
                 $offset = abs($requestedArrival->diffInDays(Carbon::parse($w['start']), false));
-                $score  = [$offset, -$w['nights']];
+                $score = [$offset, -$w['nights']];
                 if ($best === null || $score < $best['score']) {
                     $best = ['score' => $score, 'window' => $w, 'offset' => $offset];
                 }
@@ -1908,10 +2042,10 @@ class LodgifyRepository
             $departureDate = Carbon::parse($best['window']['end'])->addDay()->toDateString();
 
             $out->push([
-                'cottage'     => $cottage,
-                'arrival'     => $best['window']['start'],
-                'departure'   => $departureDate,
-                'nights'      => $best['window']['nights'],
+                'cottage' => $cottage,
+                'arrival' => $best['window']['start'],
+                'departure' => $departureDate,
+                'nights' => $best['window']['nights'],
                 'offset_days' => $best['offset'],
             ]);
         }
@@ -1930,6 +2064,7 @@ class LodgifyRepository
     protected function uniqueSlug(string $value, int $id): string
     {
         $base = Str::slug($value);
+
         return $base === '' ? (string) $id : "{$base}-{$id}";
     }
 
@@ -1951,32 +2086,32 @@ class LodgifyRepository
             $nights = [];
             $blocked = [];
             $cursor = Carbon::parse($arrival);
-            $end    = Carbon::parse($departure);
+            $end = Carbon::parse($departure);
             while ($cursor->lt($end)) {
-                $k   = $cursor->toDateString();
+                $k = $cursor->toDateString();
                 $day = $days[$k] ?? null;
-                $free = $day && !empty($day['isAvailable']);
+                $free = $day && ! empty($day['isAvailable']);
                 $nights[$k] = $day === null ? 'no-data' : ($free ? 'free' : 'booked');
-                if (!$free) {
+                if (! $free) {
                     $blocked[] = $k;
                 }
                 $cursor->addDay();
             }
 
             $out[] = [
-                'id'            => $cottage->id,
-                'name'          => $cottage->name,
-                'slug'          => $cottage->slug,
-                'room_id'       => $cottage->primaryRoomId(),
-                'max_guests'    => $cottage->maxGuests,
-                'pet_friendly'  => $cottage->petFriendly,
-                'days_fetched'  => count($days),
-                'nights'        => $nights,
-                'bookable'      => $blocked === [] && $days !== [],
+                'id' => $cottage->id,
+                'name' => $cottage->name,
+                'slug' => $cottage->slug,
+                'room_id' => $cottage->primaryRoomId(),
+                'max_guests' => $cottage->maxGuests,
+                'pet_friendly' => $cottage->petFriendly,
+                'days_fetched' => count($days),
+                'nights' => $nights,
+                'bookable' => $blocked === [] && $days !== [],
                 'blocked_dates' => $blocked,
-                'reason'        => $days === []
+                'reason' => $days === []
                     ? 'no availability data returned for this cottage'
-                    : ($blocked === [] ? 'available' : 'blocked on ' . count($blocked) . ' night(s)'),
+                    : ($blocked === [] ? 'available' : 'blocked on '.count($blocked).' night(s)'),
             ];
         }
 

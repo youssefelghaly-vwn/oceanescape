@@ -65,6 +65,27 @@ class BookingCreator
             throw new BookingException("Unknown cottage: {$data['slug']}");
         }
 
+        /*
+         * Refuse a cottage we cannot describe to Lodgify.
+         *
+         * primaryRoomId() is null when the property payload carried no `rooms[]` — which
+         * happens when the detail fetch failed and we fell back to the thin list entry. Such
+         * a cottage has no rate calendar and no quote, and a create payload without a
+         * room_type_id is not a booking Lodgify can honour. Better to decline here than to
+         * take a guest's details for a reservation that cannot be made.
+         */
+        if ($cottage->primaryRoomId() === null) {
+            throw new class("Cottage {$cottage->id} has no room type id; refusing to book.") extends BookingException
+            {
+                public function guestMessage(): ?string
+                {
+                    return 'We could not open that cottage for online booking just now. '
+                         .'Please call us on '.config('booking.support_phone').' and we will '
+                         .'take the booking by phone.';
+                }
+            };
+        }
+
         $arrival = Carbon::parse($data['arrival'])->startOfDay();
         $departure = Carbon::parse($data['departure'])->startOfDay();
 

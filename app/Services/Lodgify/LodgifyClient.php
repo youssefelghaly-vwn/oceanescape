@@ -2,7 +2,9 @@
 
 namespace App\Services\Lodgify;
 
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -76,7 +78,35 @@ class LodgifyClient
             'Accept' => 'application/json',
         ])
             ->timeout($this->timeout)
-            ->retry($this->retries, $this->retryDelay, throw: false);
+            ->retry($this->retries, $this->retryDelay, $this->shouldRetry(), throw: false);
+    }
+
+    /**
+     * Retry only what retrying can actually fix.
+     *
+     * Without this predicate every 4xx was retried too, so each phantom property — an id
+     * /v2/properties lists but /v2/properties/{id} 404s — cost TWO requests instead of one,
+     * on every page load. Retrying "this property does not exist" cannot change the answer.
+     *
+     * Retryable: connection failures (DNS, timeout, reset), 429, and 5xx.
+     * Not retryable: every other 4xx. A 404 is an answer; a 401/403 needs a credential or a
+     * header change, not another attempt.
+     */
+    protected function shouldRetry(): \Closure
+    {
+        return function (\Throwable $e): bool {
+            if ($e instanceof ConnectionException) {
+                return true;
+            }
+
+            if (! $e instanceof RequestException) {
+                return false;
+            }
+
+            $status = $e->response->status();
+
+            return $status === 429 || $status >= 500;
+        };
     }
 
     /**
@@ -92,7 +122,7 @@ class LodgifyClient
             'Origin' => $siteOrigin,
         ]))
             ->timeout($this->timeout)
-            ->retry($this->retries, $this->retryDelay, throw: false);
+            ->retry($this->retries, $this->retryDelay, $this->shouldRetry(), throw: false);
     }
 
     // =========================================================================
@@ -1325,7 +1355,21 @@ class LodgifyClient
         if ($response->successful()) {
             return;
         }
-        Log::error("Lodgify API error [{$context}]", [
+
+        /*
+         * Level by what the status actually MEANS, not "non-2xx is an error".
+         *
+         * 404/410 is Lodgify answering the question: this thing is not here. That happens
+         * routinely — /v2/properties lists ids that /v2/properties/{id} rejects with
+         * "The property with identifier N does not exists" — and logging it at error level
+         * buried genuine faults under noise the operator can do nothing about per-request.
+         *
+         * Everything else (403 Cloudflare blocks, 5xx, timeouts) stays at error, because
+         * those are problems with the call rather than answers to it.
+         */
+        $level = in_array($response->status(), [404, 410], true) ? 'warning' : 'error';
+
+        Log::log($level, "Lodgify API error [{$context}]", [
             'status' => $response->status(),
             'server' => $response->header('Server'),
             'cf_ray' => $response->header('Cf-Ray'),

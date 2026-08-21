@@ -623,6 +623,22 @@ the email that their dates are not yet held. If double-bookings occur in practic
 lever is a shorter TTL — or moving to in-session payment, which removes the window
 entirely.
 
+### Phantom properties are dropped from the site
+
+Lodgify's `/v2/properties` list advertises ids that `/v2/properties/{id}` 404s (deleted or
+orphaned records still in the index). Those cottages are now **excluded** rather than
+rendered from the thin list payload, because a list-only cottage has no `rooms[]` — so no
+room id, no rate calendar, no quote, and a booking payload Lodgify cannot honour. A cottage
+that appears but cannot be booked is worse than one that is absent.
+
+A transient failure (5xx, timeout) still falls back to the list entry, which is the right
+behaviour there. `php artisan tinker` or `/debug/lodgify` → `phantom_properties` lists the
+offending ids so they can be cleaned up in the Lodgify dashboard.
+
+`BookingCreator` additionally refuses outright to book a cottage whose `primaryRoomId()` is
+null, so this can never reach the point of taking a guest's details for an impossible
+reservation.
+
 ### Payment recording in Lodgify is unverified
 Until `LODGIFY_RECORD_PAYMENT_PATH` is confirmed, the Lodgify dashboard will show an
 outstanding balance on bookings that are fully paid. Our records are correct; Lodgify's
