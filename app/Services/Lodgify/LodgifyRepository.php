@@ -418,8 +418,7 @@ class LodgifyRepository
         int $pets = 0,
         array $addOnIds = [],
     ): ?array {
-        $addonKey = $addOnIds === [] ? '' : ':' . implode('-', $addOnIds);
-        $key = "quote:v2:{$cottageId}:{$arrival}:{$departure}:{$adults}:{$children}:{$pets}{$addonKey}";
+        $key = $this->quoteCacheKey($cottageId, $arrival, $departure, $adults, $children, $pets, $addOnIds);
 
         return $this->rememberArray(
             $key,
@@ -455,6 +454,67 @@ class LodgifyRepository
                 return null;
             }
         );
+    }
+
+    /**
+     * Cache key for a quote.
+     *
+     * HASHED, not interpolated. The variable part is entirely request-derived, and an
+     * unbounded key namespace against the `database` cache driver means one INSERT per
+     * distinct request — a cheap way for an unauthenticated visitor to bloat the cache
+     * table. Hashing also bounds the key length, which matters because `cache.key` is a
+     * primary key.
+     *
+     * @param array<int, string|int> $addOnIds
+     */
+    protected function quoteCacheKey(
+        int $cottageId,
+        string $arrival,
+        string $departure,
+        int $adults,
+        int $children,
+        int $pets,
+        array $addOnIds = [],
+    ): string {
+        $fingerprint = hash('sha256', implode('|', [
+            $arrival, $departure, $adults, $children, $pets, implode(',', $addOnIds),
+        ]));
+
+        return "quote:v3:{$cottageId}:" . substr($fingerprint, 0, 24);
+    }
+
+    /**
+     * Drop a cached quote so the next read is live.
+     *
+     * Used at the moment of booking: a 60s-stale price is fine for a display panel and
+     * not fine for deciding what to charge a card.
+     *
+     * @param array<int, string|int> $addOnIds
+     */
+    public function forgetQuote(
+        int $cottageId,
+        string $arrival,
+        string $departure,
+        int $adults = 2,
+        int $children = 0,
+        int $pets = 0,
+        array $addOnIds = [],
+    ): void {
+        $key = $this->quoteCacheKey($cottageId, $arrival, $departure, $adults, $children, $pets, $addOnIds);
+
+        $tag     = (string) config('lodgify.cache_tag', 'lodgify');
+        $driver  = config('cache.default');
+        $useTags = in_array($driver, ['redis', 'memcached'], true);
+
+        $versioned = self::CACHE_VERSION . ':' . $key;
+
+        if ($useTags) {
+            Cache::tags([$tag])->forget($versioned);
+
+            return;
+        }
+
+        Cache::store()->forget("{$tag}:{$versioned}");
     }
 
     // =========================================================================

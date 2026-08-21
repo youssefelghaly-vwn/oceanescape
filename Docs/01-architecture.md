@@ -235,7 +235,16 @@ LodgifyRepository $lodgify) {}`), which is consistent throughout.
 These are defects in the architecture *as committed*, found by reading the source. They
 are ordered by severity.
 
-### D1 — The scheduler references a class that does not exist ❗
+### D1 — The scheduler references a class that does not exist ❗ — **FIXED**
+
+> **Resolved.** `routes/console.php` no longer references the missing
+> `SyncCottageAvailability`; the broken entry was removed (with a comment pointing back
+> here) while adding the payments feature's own scheduled commands, because it blocked
+> every `artisan` invocation including the test suite. **D2 below still stands** — the
+> availability-sync work this belonged to is still unbuilt, and remains the recommendation
+> in Part 3.
+>
+> The original diagnosis follows.
 
 `routes/console.php`:
 

@@ -46,6 +46,12 @@ therefore run inside the **`web` middleware group** (cookies, session, CSRF veri
 | GET | `/api/cottage/{slug}/quote` | `throttle:120,1` | `RateController@quote` | `api.cottage.quote` |
 | GET | `/api/cottage/{slug}/addons` | `throttle:60,1` | `RateController@addons` | `api.cottage.addons` |
 | GET | `/book/{slug}` | `throttle:30,1` | `BookingRedirectController` (invokable) | `booking.redirect` |
+| POST | `/booking` | `throttle:booking-create` | `BookingController@store` | `booking.store` |
+| GET | `/booking/submitted` | web | `BookingController@submitted` | `booking.submitted` |
+| GET | `/pay/{token}` | `signed`, `throttle:payment-page` | `PaymentController@show` | `booking.pay` |
+| GET | `/pay/{token}/success` | `throttle:payment-page` | `PaymentController@success` | `booking.pay.success` |
+| GET | `/pay/{token}/cancelled` | `throttle:payment-page` | `PaymentController@cancelled` | `booking.pay.cancelled` |
+| POST | `/webhooks/stripe` | `throttle:stripe-webhook`, **CSRF-exempt** | `Webhooks\StripeWebhookController@handle` | `webhooks.stripe` |
 | GET | `/things-to-do` | web | `Route::view('pages.things-to-do')` | `things-to-do` |
 | GET | `/privacy-and-policy` | web | `Route::view('pages.privacy-and-policy')` | `privacy` |
 | GET | `/gallery` | web | `GalleryController@index` | `gallery` |
@@ -691,6 +697,13 @@ subsequent quote requests (§7).
 
 # 9. Checkout handoff — `GET /book/{slug}`
 
+> **Superseded when direct payments are on.** With
+> `BOOKING_DIRECT_PAYMENTS=true` the site takes the booking and the money itself via
+> `POST /booking`, and this route becomes the fallback path only. See
+> [`05-payments-and-booking.md`](05-payments-and-booking.md). Everything below still
+> describes the route accurately — it is unchanged, and it is what runs when the flag is
+> off.
+
 **Route** `routes/web.php:171`, `throttle:30,1` → `BookingRedirectController::__invoke`
 (single-action controller)
 
@@ -779,7 +792,9 @@ and **neither is ever called** — no webhook route, no reconciliation job. So:
 - every intent eventually ages past `lodgify.checkout_grace_minutes` (90) and is counted
   as `abandoned`.
 
-Closing this is Stage 7 in [`01-architecture.md` §Part 4](01-architecture.md).
+Closing this is Stage 7 in [`01-architecture.md` §Part 4](01-architecture.md). Note that
+the direct-payment flow makes this partly moot for bookings taken on this site — those are
+tracked properly in `bookings` — but the table still never records a conversion.
 
 ---
 

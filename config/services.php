@@ -41,4 +41,46 @@ return [
         'cache_ttl' => (int) env('GOOGLE_REVIEWS_CACHE', 21600),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Stripe
+    |--------------------------------------------------------------------------
+    | We use HOSTED Stripe Checkout Sessions, not the embedded Payment Element.
+    |
+    | That choice is deliberate and worth keeping: card data never touches this
+    | server, which keeps us in PCI SAQ A rather than SAQ A-EP. It is the same
+    | reasoning that kept us out of PCI scope when Lodgify collected the money
+    | (see App\Services\Lodgify\LodgifyCheckout) — we are changing WHO takes the
+    | payment, not accepting card data ourselves.
+    |
+    | `webhook_secret` is the signing secret for the endpoint, NOT the API key.
+    | Stripe issues a different one per endpoint; using the wrong value makes every
+    | webhook fail signature verification and silently strands paid bookings.
+    */
+    'stripe' => [
+        'key'    => env('STRIPE_KEY'),
+        'secret' => env('STRIPE_SECRET'),
+
+        'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
+
+        /*
+        | Reject webhooks whose signature timestamp is older than this, to bound
+        | replay of a captured request. Stripe's own default is 300s.
+        */
+        'webhook_tolerance' => (int) env('STRIPE_WEBHOOK_TOLERANCE', 300),
+
+        /*
+        | Stripe API version.
+        |
+        | Null means "use whatever version stripe/stripe-php itself pins"
+        | (\Stripe\Util\ApiVersion::CURRENT), which is the correct default: the SDK's
+        | typed objects are written against that exact version, so overriding it with a
+        | different string is how you get fields the SDK cannot deserialise.
+        |
+        | Only set STRIPE_API_VERSION to deliberately hold an older version during an
+        | upgrade, and move it in step with the composer package — never independently.
+        */
+        'api_version' => env('STRIPE_API_VERSION'),
+    ],
+
 ];

@@ -19,6 +19,9 @@ use App\Http\Controllers\GuestPhotoController;
 use App\Http\Controllers\ReviewController;
 use App\Http\Controllers\Admin\CheckoutIntentController;
 use App\Http\Controllers\BookingRedirectController;
+use App\Http\Controllers\BookingController;
+use App\Http\Controllers\PaymentController;
+use App\Http\Controllers\Webhooks\StripeWebhookController;
 use App\Http\Controllers\Admin\ReservationController as AdminReservationController;
 use App\Http\Controllers\Auth\RegisterController;
 use App\Http\Controllers\ProfileController;
@@ -175,6 +178,69 @@ Route::get('/book/{slug}', BookingRedirectController::class)
 Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(function () {
     Route::get('/checkouts', [CheckoutIntentController::class, 'index'])->name('checkouts.index');
 });
+
+
+/*
+|--------------------------------------------------------------------------
+| Direct booking + Stripe payments
+|--------------------------------------------------------------------------
+| Replaces the hand-off to Lodgify's hosted checkout when
+| config('booking.direct_payments_enabled') is true. /book/{slug} above remains the
+| fallback and is what BookingController redirects to when the flag is off.
+|
+| Flow: POST /booking creates the reservation in Lodgify as `Open` (charging nothing) and
+| emails a Stripe link. The guest pays from that link; the WEBHOOK is what confirms the
+| booking. See Docs/05-payments-and-booking.md.
+*/
+
+Route::post('/booking', [BookingController::class, 'store'])
+    // Each attempt can create a Lodgify reservation and a Stripe session, so this is
+    // deliberately tighter than the read endpoints.
+    ->middleware('throttle:booking-create')
+    ->name('booking.store');
+
+Route::get('/booking/submitted', [BookingController::class, 'submitted'])
+    ->name('booking.submitted');
+
+/*
+ * Payment pages.
+ *
+ * `signed` is doing real work here: the token in the path is 32 random bytes, and the
+ * signature adds an expiry we control, so a forwarded link stops working when we say it
+ * does rather than whenever Stripe's own session lapses.
+ */
+Route::middleware(['signed', 'throttle:payment-page'])->group(function () {
+    Route::get('/pay/{token}', [PaymentController::class, 'show'])->name('booking.pay');
+});
+
+/*
+ * Stripe's return URLs. NOT signed — Stripe appends its own query parameters and
+ * redirects the browser here, which would break a signature. That is safe because
+ * neither page grants anything: they only read state, and any reconciliation they do
+ * goes through the same idempotent, amount-checking settler as the webhook.
+ */
+Route::get('/pay/{token}/success',   [PaymentController::class, 'success'])
+    ->middleware('throttle:payment-page')
+    ->name('booking.pay.success');
+
+Route::get('/pay/{token}/cancelled', [PaymentController::class, 'cancelled'])
+    ->middleware('throttle:payment-page')
+    ->name('booking.pay.cancelled');
+
+/*
+ * Stripe webhook.
+ *
+ * CSRF-exempt (see bootstrap/app.php) because Stripe cannot present a token, and
+ * therefore SIGNATURE-VERIFIED inside the controller before the body is parsed. That
+ * verification is the only thing protecting this endpoint — see the controller docblock.
+ *
+ * Throttled generously rather than tightly: rate-limiting a payment webhook into a 429
+ * means Stripe retries and a real payment is delayed, so the limit is set well above
+ * Stripe's burst behaviour and exists only to blunt an outright flood.
+ */
+Route::post('/webhooks/stripe', [StripeWebhookController::class, 'handle'])
+    ->middleware('throttle:stripe-webhook')
+    ->name('webhooks.stripe');
 
 
 

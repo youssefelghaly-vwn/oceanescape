@@ -630,12 +630,218 @@ class LodgifyClient
     // Bookings
     // =========================================================================
 
+    /**
+     * Writes get their own transport: longer timeout, and CRUCIALLY no retries.
+     *
+     * http() applies ->retry($this->retries, ...). Retrying a non-idempotent POST is how
+     * you end up with two reservations for the same nights. Retry belongs at the job
+     * level, guarded on bookings.lodgify_booking_id being null — see
+     * App\Jobs\CreateLodgifyBooking.
+     */
+    protected function writeHttp(): PendingRequest
+    {
+        return Http::withHeaders([
+            'X-ApiKey' => $this->apiKey,
+            'Accept'   => 'application/json',
+        ])->timeout((int) config('lodgify.write.timeout', 30))
+          ->asJson();
+    }
+
+    /**
+     * Create a reservation.
+     *
+     * PATH CORRECTED: this previously posted to /v2/reservations/bookings, which is the
+     * v2 LIST endpoint, not a create endpoint. The documented create route is
+     * POST /v1/reservation/booking. The old path had never failed in production only
+     * because nothing ever called this method.
+     *
+     * The payload is built by LodgifyBookingWriter from a config-driven field map,
+     * because the request-body field names are not verified against a live account.
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
     public function createBooking(array $payload): array
     {
-        $response = $this->http()->asJson()
-            ->post("{$this->baseUrl}/v2/reservations/bookings", $payload);
+        $path = (string) config('lodgify.write.create_booking_path', '/v1/reservation/booking');
+
+        $response = $this->writeHttp()->post("{$this->baseUrl}{$path}", $payload);
         $this->assertOk($response, 'createBooking');
+
         return $response->json() ?? [];
+    }
+
+    /**
+     * Flip a reservation to Booked.
+     *
+     * Per Lodgify's docs this "changes the status of a booking to Booked and updates the
+     * availability calendar accordingly" — i.e. THIS is the call that actually blocks the
+     * dates. Until it succeeds the reservation is Open and the nights remain sellable.
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    public function markBookingBooked(int|string $bookingId, array $payload = []): array
+    {
+        $path = str_replace(
+            '{id}',
+            rawurlencode((string) $bookingId),
+            (string) config('lodgify.write.mark_booked_path', '/v1/reservation/booking/{id}/book')
+        );
+
+        $response = $this->writeHttp()->put("{$this->baseUrl}{$path}", $payload);
+        $this->assertOk($response, "markBookingBooked:{$bookingId}");
+
+        return $response->json() ?? [];
+    }
+
+    /**
+     * Record a payment against a reservation.
+     *
+     * ⚠ No public endpoint for this has been confirmed. When
+     * `lodgify.write.record_payment_path` is null we do not call anything — guessing a
+     * URL and POSTing money-shaped data at it is worse than not trying. The caller
+     * treats a null return as "not recorded" and surfaces it to an admin.
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>|null  null when no endpoint is configured
+     */
+    public function recordBookingPayment(int|string $bookingId, array $payload): ?array
+    {
+        $configured = config('lodgify.write.record_payment_path');
+
+        if (blank($configured)) {
+            return null;
+        }
+
+        $path = str_replace('{id}', rawurlencode((string) $bookingId), (string) $configured);
+
+        $response = $this->writeHttp()->post("{$this->baseUrl}{$path}", $payload);
+        $this->assertOk($response, "recordBookingPayment:{$bookingId}");
+
+        return $response->json() ?? [];
+    }
+
+    /**
+     * Delete/release a reservation, used when an unpaid deposit link lapses so the
+     * nights go back on sale.
+     *
+     * @return array<string, mixed>
+     */
+    public function deleteBooking(int|string $bookingId): array
+    {
+        $path = str_replace(
+            '{id}',
+            rawurlencode((string) $bookingId),
+            (string) config('lodgify.write.delete_booking_path', '/v1/reservation/booking/{id}')
+        );
+
+        $response = $this->writeHttp()->delete("{$this->baseUrl}{$path}");
+        $this->assertOk($response, "deleteBooking:{$bookingId}");
+
+        return $response->json() ?? [];
+    }
+
+    /**
+     * Discover the real create-booking contract without committing to a shape.
+     *
+     * Sends a series of candidate payloads and reports exactly what Lodgify says to each,
+     * in the same spirit as probeRatesCalendar() and probeBookings(). Surfaced through
+     * `php artisan lodgify:probe-booking-write`.
+     *
+     * ⚠ A SUCCESSFUL ATTEMPT CREATES A REAL RESERVATION. The caller is responsible for
+     * requiring explicit confirmation and for telling the operator to delete what it
+     * makes — every candidate is deliberately labelled as a test in the guest name.
+     *
+     * @param  array<string, mixed>  $base  identifying fields (property, room, dates)
+     * @return array<int, array<string, mixed>>
+     */
+    public function probeBookingWrite(array $base): array
+    {
+        $path = (string) config('lodgify.write.create_booking_path', '/v1/reservation/booking');
+        $url  = "{$this->baseUrl}{$path}";
+
+        $guest = [
+            'name'         => 'API PROBE — DELETE ME',
+            'email'        => 'api-probe@example.invalid',
+            'phone'        => '+10000000000',
+            'country_code' => 'CA',
+        ];
+
+        $candidates = [
+            'snake_case + nested guest' => [
+                'property_id' => $base['property_id'],
+                'arrival'     => $base['arrival'],
+                'departure'   => $base['departure'],
+                'status'      => 'Open',
+                'source'      => 'Website',
+                'guest'       => $guest,
+                'rooms'       => [['room_type_id' => $base['room_type_id'], 'people' => 2]],
+            ],
+            'snake_case, flat guest' => [
+                'property_id'  => $base['property_id'],
+                'arrival'      => $base['arrival'],
+                'departure'    => $base['departure'],
+                'status'       => 'Open',
+                'guest_name'   => $guest['name'],
+                'guest_email'  => $guest['email'],
+                'rooms'        => [['room_type_id' => $base['room_type_id'], 'people' => 2]],
+            ],
+            'PascalCase' => [
+                'PropertyId' => $base['property_id'],
+                'Arrival'    => $base['arrival'],
+                'Departure'  => $base['departure'],
+                'Status'     => 'Open',
+                'Guest'      => [
+                    'Name'  => $guest['name'],
+                    'Email' => $guest['email'],
+                ],
+                'Rooms'      => [['RoomTypeId' => $base['room_type_id'], 'People' => 2]],
+            ],
+            'camelCase' => [
+                'propertyId' => $base['property_id'],
+                'arrival'    => $base['arrival'],
+                'departure'  => $base['departure'],
+                'status'     => 'Open',
+                'guest'      => $guest,
+                'rooms'      => [['roomTypeId' => $base['room_type_id'], 'people' => 2]],
+            ],
+            'houseId naming' => [
+                'house_id'     => $base['property_id'],
+                'room_type_id' => $base['room_type_id'],
+                'arrival'      => $base['arrival'],
+                'departure'    => $base['departure'],
+                'status'       => 'Open',
+                'guest'        => $guest,
+            ],
+        ];
+
+        $results = [];
+
+        foreach ($candidates as $label => $payload) {
+            $response = $this->writeHttp()->post($url, $payload);
+            $json     = $response->successful() ? $response->json() : null;
+
+            $results[] = [
+                'attempt'        => $label,
+                'url'            => $url,
+                'status'         => $response->status(),
+                'ok'             => $response->successful(),
+                'sent'           => $payload,
+                // On success this is the created reservation — including its id, which
+                // is what you need to delete it again.
+                'response'       => $json,
+                'created_id'     => is_array($json) ? ($json['id'] ?? $json['booking_id'] ?? null) : null,
+                'body_excerpt'   => $response->successful() ? null : mb_substr($response->body(), 0, 400),
+            ];
+
+            // Stop at the first shape Lodgify accepts — no reason to create more.
+            if ($response->successful()) {
+                break;
+            }
+        }
+
+        return $results;
     }
 
     public function getBooking(int|string $bookingId): array
