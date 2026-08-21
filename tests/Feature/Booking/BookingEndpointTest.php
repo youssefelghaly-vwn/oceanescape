@@ -100,6 +100,20 @@ class BookingEndpointTest extends TestCase
     }
 
     #[Test]
+    public function a_failed_submission_lands_back_on_the_details_form(): void
+    {
+        /*
+         * The POST has nowhere sensible to fall back to on its own: a bare back() depends
+         * on the Referer header and would bounce to "/" without it, silently swallowing the
+         * errors. The redirect target is therefore explicit.
+         */
+        $response = $this->post('/booking', $this->valid(['guest_email' => 'not-an-email']));
+
+        $response->assertRedirectContains('/booking/details/sea-glass-738423');
+        $response->assertSessionHasErrors('guest_email');
+    }
+
+    #[Test]
     public function the_confirmation_page_is_not_reachable_without_a_booking_in_session(): void
     {
         // The reference lives in the session, not the URL, so it cannot be guessed.

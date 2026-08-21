@@ -38,7 +38,10 @@ that we sent someone away — see [`01-architecture.md`](01-architecture.md) and
 We own the money; **Lodgify still owns the reservation**.
 
 ```
-guest → POST /booking            (nothing charged)
+guest → cottage page, picks dates → "Book now"
+      → GET /booking/details/{slug}      re-prices the stay SERVER-SIDE, collects
+                                         name / email / phone / terms
+      → POST /booking                    (nothing charged)
           ├─ re-quote from Lodgify, live
           ├─ re-check availability
           ├─ derive the payment plan from Lodgify's own schedule
@@ -74,6 +77,34 @@ scheduler → balance link → guest pays → webhook → recorded (already Book
 ---
 
 # Part 2 — The flow, step by step
+
+## 2.0 `GET /booking/details/{slug}` — the guest-details step
+
+Where the cottage page's **Book now** button goes when the flag is on. `bookUrl` in
+`pages/cottage.blade.php` is conditional on `booking.direct_payments_enabled`, so the flag
+is the only thing that changes which flow the button enters:
+
+```blade
+bookUrl: '{{ config('booking.direct_payments_enabled')
+              ? route('booking.details', $cottage->slug)
+              : route('booking.redirect', $cottage->slug) }}',
+```
+
+A real page rather than a modal, for three reasons:
+
+- **Validation failures have somewhere to land.** `StoreBookingRequest::getRedirectUrl()`
+  is overridden to return here — the FormRequest redirect happens *before* the controller
+  runs, so the controller's own error handling never sees it, and Laravel's default
+  `back()` depends on a `Referer` header that may not be there.
+- It survives a refresh and can be linked to.
+- **The price is re-quoted server-side**, so the figure the guest agrees to is the figure
+  `DepositPolicy` will charge — not whatever the calendar widget happened to show.
+
+That last point also gives us drift detection: the calendar passes the total it was
+displaying, and if the live quote disagrees the page says so plainly rather than quietly
+charging a different number. If Lodgify will not price the stay at all, the guest is sent
+back to the cottage page with an explanation instead of being shown a form that cannot
+succeed.
 
 ## 2.1 `POST /booking` — create, charge nothing
 
@@ -456,7 +487,7 @@ live API could not be probed.
 
 # Part 8 — Testing
 
-**90 tests, 362 assertions, all passing.** `php artisan test`
+**103 tests, 429 assertions, all passing.** `php artisan test`
 
 | Suite | Covers |
 |---|---|
@@ -470,7 +501,10 @@ live API could not be probed.
 | `PaymentLinkAccessTest` | Unsigned/tampered/expired signature rejection, cross-token substitution, token entropy, already-paid receipt |
 | `LodgifyConfirmationJobTest` | Success, no-op when already booked, rethrow for retry, **alert on exhaustion**, and still-recorded when no alert address |
 | `SweeperTest` | Balance windows, hourly idempotency, zero balance, release of unpaid reservations, and **never releasing a booking that was just paid** |
-| `BookingEndpointTest` | Honeypot, terms, date rules, feature-flag fallback, rate limiting |
+| `BookingEndpointTest` | Honeypot, terms, date rules, feature-flag fallback, rate limiting, failed submissions landing back on the form |
+| `BookingDetailsPageTest` | Server-side pricing, price-drift warning, refusal when unpriceable, date validation, user prefill, CSRF + honeypot present |
+| `BookButtonTargetTest` | **Regression:** the cottage page's Book button points at our details step with the flag on, and at Lodgify with it off |
+| `EndToEndFlowTest` | The whole journey through real routes: cottage page → details → reserve → signed link → webhook → confirmed → balance link |
 
 Note `tests/TestCase.php` enables the feature flag, injects fake Stripe credentials, and
 calls `withoutVite()` (views use `@vite`, and the suite asserts on copy rather than asset

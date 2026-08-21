@@ -193,6 +193,15 @@ Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(fun
 | booking. See Docs/05-payments-and-booking.md.
 */
 
+/*
+ * The guest-details step. This is where the cottage page's "Book now" button goes when
+ * direct payments are on; it re-prices the stay server-side and collects the details we
+ * need to create the reservation.
+ */
+Route::get('/booking/details/{slug}', [BookingController::class, 'details'])
+    ->middleware('throttle:60,1')
+    ->name('booking.details');
+
 Route::post('/booking', [BookingController::class, 'store'])
     // Each attempt can create a Lodgify reservation and a Stripe session, so this is
     // deliberately tighter than the read endpoints.

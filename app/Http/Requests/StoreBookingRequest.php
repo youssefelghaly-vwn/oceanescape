@@ -84,6 +84,31 @@ class StoreBookingRequest extends FormRequest
         ];
     }
 
+    /**
+     * Send validation failures back to the details form, not to "/".
+     *
+     * FormRequest failures are redirected by Laravel itself, BEFORE the controller runs —
+     * so the controller's own error handling never sees them. The default is back(), which
+     * depends on the Referer header; without one it bounces to the site root and the errors
+     * are silently swallowed. Building the URL from the submitted stay makes it
+     * deterministic.
+     */
+    protected function getRedirectUrl(): string
+    {
+        if (filled($this->input('slug')) && filled($this->input('arrival'))) {
+            return $this->redirector->getUrlGenerator()->route('booking.details', array_filter([
+                'slug' => $this->input('slug'),
+                'arrival' => $this->input('arrival'),
+                'departure' => $this->input('departure'),
+                'adults' => $this->input('adults'),
+                'children' => $this->input('children'),
+                'pets' => $this->input('pets'),
+            ], fn ($v) => $v !== null && $v !== ''));
+        }
+
+        return parent::getRedirectUrl();
+    }
+
     protected function prepareForValidation(): void
     {
         $this->merge([

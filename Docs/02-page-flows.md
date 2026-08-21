@@ -46,6 +46,7 @@ therefore run inside the **`web` middleware group** (cookies, session, CSRF veri
 | GET | `/api/cottage/{slug}/quote` | `throttle:120,1` | `RateController@quote` | `api.cottage.quote` |
 | GET | `/api/cottage/{slug}/addons` | `throttle:60,1` | `RateController@addons` | `api.cottage.addons` |
 | GET | `/book/{slug}` | `throttle:30,1` | `BookingRedirectController` (invokable) | `booking.redirect` |
+| GET | `/booking/details/{slug}` | `throttle:60,1` | `BookingController@details` | `booking.details` |
 | POST | `/booking` | `throttle:booking-create` | `BookingController@store` | `booking.store` |
 | GET | `/booking/submitted` | web | `BookingController@submitted` | `booking.submitted` |
 | GET | `/pay/{token}` | `signed`, `throttle:payment-page` | `PaymentController@show` | `booking.pay` |
