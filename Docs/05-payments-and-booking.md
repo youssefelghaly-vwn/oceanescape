@@ -388,7 +388,49 @@ the audit write itself failed.
 
 **Read this before enabling the feature in production.**
 
-## What is established
+## What is now CONFIRMED against a live account
+
+The create call has been exercised for real, and it works with the **default** field map —
+no remapping needed:
+
+| Fact | How we know |
+|---|---|
+| `POST /v1/reservation/booking` accepts the default `field_map` — snake_case keys with a nested `guest` object and a `rooms[]` array | A real create returned 2xx in production |
+| It responds with a **bare integer** reservation id, e.g. `17388658` — not an object | Same. `createBooking()` was typed `: array` and threw a TypeError on it |
+
+That second row cost a real reservation. The TypeError fired *after* the HTTP call
+succeeded, so Lodgify created the booking and we discarded its id — leaving an orphaned
+`Open` reservation on the calendar with nothing pointing at it. Three changes came out of
+it:
+
+- The write methods return `mixed` (raw decoded JSON). `extractBookingId()` already handled
+  bare ids; the client's narrow return type was the whole bug.
+- `createOpenBooking()` and `markBooked()` now catch `\Throwable`, not just
+  `LodgifyApiException`, so a post-request failure becomes a `LodgifyWriteFailed` carrying
+  the context and a `critical` log line instead of escaping raw.
+- **`php artisan booking:reconcile-orphans`** is the recovery path — see below.
+
+`LodgifyWriteResponseShapeTest` pins all of it: bare int, quoted string, `{id}`,
+`{data:{id}}`, 2xx-with-no-usable-id, and that writes are never retried at the transport.
+
+## Recovering an orphaned reservation
+
+```bash
+php artisan booking:reconcile-orphans           # report only
+php artisan booking:reconcile-orphans --link    # attach the matches
+```
+
+Reads the reservation feed back out of Lodgify (the read side has always worked) and
+matches it to bookings stuck with no `lodgify_booking_id`, on property + arrival +
+departure, disambiguating on guest email where Lodgify has one.
+
+It refuses to guess. Several reservations on the same nights with no email match →
+reported as ambiguous and left alone, because attaching our booking (and later our
+payments) to a stranger's reservation is far worse than making someone look. A booking
+already marked `failed` is relinked but **not** silently revived — somebody decided it
+failed, and reviving it behind their back is its own bug.
+
+## What was established from documentation
 
 | Fact | Source |
 |---|---|
@@ -398,14 +440,16 @@ the audit write itself failed.
 | `total_amount` / `amount_paid` / `amount_due` exist on a reservation | Same |
 | Auth is the `X-ApiKey` header | Existing working code |
 
-## What is NOT established
+## What is STILL not established
 
-- The **request-body field names** for the create call.
+- Whether `PUT /v1/reservation/booking/{id}/book` behaves as documented — specifically
+  whether the Lodgify calendar really blocks afterwards. **Verify this by eye in the
+  dashboard**; it is the step that stops a double booking.
 - Whether any public endpoint exists for **recording a payment** against a booking.
 
-This could not be verified from the environment this was built in: outbound access to
+Neither could be checked from the environment this was built in: outbound access to
 `docs.lodgify.com` and `api.lodgify.com` is blocked by the network egress policy, so the
-live API could not be probed.
+live API could not be probed from here.
 
 ## How the code handles that honestly
 
@@ -487,7 +531,7 @@ live API could not be probed.
 
 # Part 8 — Testing
 
-**103 tests, 429 assertions, all passing.** `php artisan test`
+**121 tests, 462 assertions, all passing.** `php artisan test`
 
 | Suite | Covers |
 |---|---|
@@ -505,6 +549,8 @@ live API could not be probed.
 | `BookingDetailsPageTest` | Server-side pricing, price-drift warning, refusal when unpriceable, date validation, user prefill, CSRF + honeypot present |
 | `BookButtonTargetTest` | **Regression:** the cottage page's Book button points at our details step with the flag on, and at Lodgify with it off |
 | `EndToEndFlowTest` | The whole journey through real routes: cottage page → details → reserve → signed link → webhook → confirmed → balance link |
+| `LodgifyWriteResponseShapeTest` | **Regression:** bare-integer / quoted-string / object / wrapped-object create responses, 2xx-with-no-id failing loudly, money-at-risk severity, and no transport-level retry on writes |
+| `ReconcileOrphansTest` | Report-vs-link, confident match, refusing an ambiguous or someone-else's reservation, email disambiguation, and not reviving a `failed` booking |
 
 Note `tests/TestCase.php` enables the feature flag, injects fake Stripe credentials, and
 calls `withoutVite()` (views use `@vite`, and the suite asserts on copy rather than asset
@@ -527,8 +573,9 @@ exercise the async path, use a delayed method rather than a card.
 
 ## Before enabling
 
-- [ ] **Verify the Lodgify create contract:** `php artisan lodgify:probe-booking-write --property=<id> --confirm`, then update `write.field_map`. Delete the probe reservation.
-- [ ] Confirm `PUT /v1/reservation/booking/{id}/book` works, and that the Lodgify calendar actually blocks afterwards.
+- [x] ~~Verify the Lodgify create contract~~ — **confirmed working with the default field map**; the endpoint returns a bare integer id. The probe command remains available if the contract ever changes.
+- [ ] Confirm `PUT /v1/reservation/booking/{id}/book` works, and **check in the Lodgify dashboard that the calendar actually blocks afterwards.** Still unverified, and it is the step that prevents double bookings.
+- [ ] Run `php artisan booking:reconcile-orphans` once, to catch anything stranded by the earlier TypeError.
 - [ ] `STRIPE_SECRET` + `STRIPE_WEBHOOK_SECRET` set (test keys first)
 - [ ] Webhook endpoint registered in Stripe for: `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`, `charge.refunded`
 - [ ] `BOOKING_ALERT_EMAIL` set and deliverable — **test it**

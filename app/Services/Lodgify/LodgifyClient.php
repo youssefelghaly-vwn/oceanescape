@@ -21,12 +21,19 @@ use Illuminate\Support\Facades\Log;
 class LodgifyClient
 {
     protected string $apiKey;
+
     protected string $baseUrl;
+
     protected string $checkoutUrl;
+
     protected string $propertyUrl;
+
     protected string $ratesUrl;
+
     protected int $timeout;
+
     protected int $retries;
+
     protected int $retryDelay;
 
     /**
@@ -35,27 +42,27 @@ class LodgifyClient
      * frontend calls the endpoint.
      */
     protected const BROWSER_HEADERS = [
-        'User-Agent'         => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-        'Accept'             => 'application/json, text/plain, */*',
-        'Accept-Language'    => 'en-US,en;q=0.9',
-        'Sec-Fetch-Dest'     => 'empty',
-        'Sec-Fetch-Mode'     => 'cors',
-        'Sec-Fetch-Site'     => 'cross-site',
-        'Sec-Ch-Ua'          => '"Chromium";v="126", "Not:A-Brand";v="24"',
-        'Sec-Ch-Ua-Mobile'   => '?0',
+        'User-Agent' => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        'Accept' => 'application/json, text/plain, */*',
+        'Accept-Language' => 'en-US,en;q=0.9',
+        'Sec-Fetch-Dest' => 'empty',
+        'Sec-Fetch-Mode' => 'cors',
+        'Sec-Fetch-Site' => 'cross-site',
+        'Sec-Ch-Ua' => '"Chromium";v="126", "Not:A-Brand";v="24"',
+        'Sec-Ch-Ua-Mobile' => '?0',
         'Sec-Ch-Ua-Platform' => '"macOS"',
     ];
 
     public function __construct()
     {
-        $this->apiKey      = (string) config('lodgify.api_key');
-        $this->baseUrl     = rtrim((string) config('lodgify.base_url'), '/');
+        $this->apiKey = (string) config('lodgify.api_key');
+        $this->baseUrl = rtrim((string) config('lodgify.base_url'), '/');
         $this->checkoutUrl = rtrim((string) config('lodgify.checkout_base_url'), '/');
         $this->propertyUrl = rtrim((string) config('lodgify.property_base_url', 'https://property.lodgify.com'), '/');
-        $this->ratesUrl    = rtrim((string) config('lodgify.rates_base_url', 'https://rates.lodgify.com'), '/');
-        $this->timeout     = (int) config('lodgify.timeout');
-        $this->retries     = (int) config('lodgify.retries');
-        $this->retryDelay  = (int) config('lodgify.retry_delay_ms');
+        $this->ratesUrl = rtrim((string) config('lodgify.rates_base_url', 'https://rates.lodgify.com'), '/');
+        $this->timeout = (int) config('lodgify.timeout');
+        $this->retries = (int) config('lodgify.retries');
+        $this->retryDelay = (int) config('lodgify.retry_delay_ms');
 
         if ($this->apiKey === '') {
             Log::warning('Lodgify API key is not configured. Set LODGIFY_API_KEY in .env');
@@ -66,7 +73,7 @@ class LodgifyClient
     {
         return Http::withHeaders([
             'X-ApiKey' => $this->apiKey,
-            'Accept'   => 'application/json',
+            'Accept' => 'application/json',
         ])
             ->timeout($this->timeout)
             ->retry($this->retries, $this->retryDelay, throw: false);
@@ -81,8 +88,8 @@ class LodgifyClient
         $siteOrigin = rtrim((string) config('lodgify.public_site_origin', 'https://oceanescapecottages.ca'), '/');
 
         return Http::withHeaders(array_merge(self::BROWSER_HEADERS, [
-            'Referer' => $siteOrigin . '/',
-            'Origin'  => $siteOrigin,
+            'Referer' => $siteOrigin.'/',
+            'Origin' => $siteOrigin,
         ]))
             ->timeout($this->timeout)
             ->retry($this->retries, $this->retryDelay, throw: false);
@@ -99,6 +106,7 @@ class LodgifyClient
         ]);
         $this->assertOk($response, 'listProperties');
         $body = $response->json();
+
         return $body['items'] ?? $body ?? [];
     }
 
@@ -106,6 +114,7 @@ class LodgifyClient
     {
         $response = $this->http()->get("{$this->baseUrl}/v2/properties/{$propertyId}");
         $this->assertOk($response, "getProperty:{$propertyId}");
+
         return $response->json() ?? [];
     }
 
@@ -144,6 +153,7 @@ class LodgifyClient
             "{$this->baseUrl}/v1/properties/{$propertyId}/rooms/{$roomId}"
         );
         $this->assertOk($response, "getRoomInfo:{$propertyId}/{$roomId}");
+
         return $response->json() ?? [];
     }
 
@@ -155,6 +165,7 @@ class LodgifyClient
     {
         $response = $this->http()->get("{$this->baseUrl}/v1/properties/{$propertyId}");
         $this->assertOk($response, "getPropertyV1:{$propertyId}");
+
         return $response->json() ?? [];
     }
 
@@ -197,6 +208,7 @@ class LodgifyClient
             ->get("{$this->baseUrl}/v1/properties/{$propertyId}/rates/addons");
 
         $this->assertOk($response, "getAddons:{$propertyId}");
+
         return $response->json() ?? [];
     }
 
@@ -211,6 +223,7 @@ class LodgifyClient
     {
         $response = $this->http()->get("{$this->baseUrl}/v1/properties/{$propertyId}/payments");
         $this->assertOk($response, "getPaymentOptions:{$propertyId}");
+
         return $response->json() ?? [];
     }
 
@@ -226,7 +239,7 @@ class LodgifyClient
      * your account. Adjust normaliseAvailabilityPeriods() to match reality.
      *
      * @return array<int, array<string,mixed>> per-day rows in the same shape
-     *         the public endpoint returns (date / isAvailable / minimalStay)
+     *                                         the public endpoint returns (date / isAvailable / minimalStay)
      */
     public function getAvailability(
         int|string $propertyId,
@@ -239,6 +252,7 @@ class LodgifyClient
         );
 
         $this->assertOk($response, "getAvailability:{$propertyId}");
+
         return $this->normaliseAvailabilityPeriods($response->json() ?? [], $startDate, $endDate);
     }
 
@@ -246,7 +260,7 @@ class LodgifyClient
      * Convert Lodgify's period-based availability into per-day rows so the
      * rest of the app treats authenticated and public data identically.
      *
-     * @param array<int, array<string,mixed>> $periods
+     * @param  array<int, array<string,mixed>>  $periods
      * @return array<int, array<string,mixed>>
      */
     /**
@@ -263,7 +277,7 @@ class LodgifyClient
      * `available` is a UNIT COUNT: 0 = booked, >=1 = bookable.
      * Period ranges are treated as INCLUSIVE of both endpoints.
      *
-     * @param array<int, mixed> $response raw decoded JSON
+     * @param  array<int, mixed>  $response  raw decoded JSON
      * @return array<int, array<string,mixed>>
      */
     protected function normaliseAvailabilityPeriods(array $response, string $startDate, string $endDate): array
@@ -271,7 +285,7 @@ class LodgifyClient
         // ---- 1. flatten to a flat list of period rows -----------------------
         $periods = [];
         foreach ($response as $entry) {
-            if (!is_array($entry)) {
+            if (! is_array($entry)) {
                 continue;
             }
             if (isset($entry['periods']) && is_array($entry['periods'])) {
@@ -280,6 +294,7 @@ class LodgifyClient
                         $periods[] = $p;
                     }
                 }
+
                 continue;
             }
             // already-flat shape
@@ -292,22 +307,23 @@ class LodgifyClient
             Log::warning('Lodgify availability returned no usable periods', [
                 'top_level_keys' => array_keys($response[0] ?? []),
             ]);
+
             return [];   // signal "no data" so the caller can fall back
         }
 
         // ---- 2. seed every day in range as UNCOVERED ------------------------
         $byDate = [];
         $cursor = new \DateTimeImmutable($startDate);
-        $end    = new \DateTimeImmutable($endDate);
+        $end = new \DateTimeImmutable($endDate);
         while ($cursor <= $end) {
             $byDate[$cursor->format('Y-m-d')] = [
-                'date'                => $cursor->format('Y-m-d'),
-                'isAvailable'         => false,
-                'isCheckInAvailable'  => false,
+                'date' => $cursor->format('Y-m-d'),
+                'isAvailable' => false,
+                'isCheckInAvailable' => false,
                 'isCheckOutAvailable' => false,
-                'minimalStay'         => 1,
-                'maximumStay'         => null,
-                '_covered'            => false,
+                'minimalStay' => 1,
+                'maximumStay' => null,
+                '_covered' => false,
             ];
             $cursor = $cursor->modify('+1 day');
         }
@@ -315,13 +331,13 @@ class LodgifyClient
         // ---- 3. apply each period ------------------------------------------
         foreach ($periods as $period) {
             $pStart = $period['start'] ?? $period['from'] ?? null;
-            $pEnd   = $period['end']   ?? $period['to']   ?? $pStart;
-            if (!$pStart) {
+            $pEnd = $period['end'] ?? $period['to'] ?? $pStart;
+            if (! $pStart) {
                 continue;
             }
 
-            $units   = (int) ($period['available'] ?? 0);
-            $isFree  = $units >= 1;
+            $units = (int) ($period['available'] ?? 0);
+            $isFree = $units >= 1;
             $minStay = (int) ($period['minimum_stay'] ?? $period['minimalStay'] ?? 0);
 
             try {
@@ -334,18 +350,18 @@ class LodgifyClient
             while ($c <= $e) {
                 $key = $c->format('Y-m-d');
                 if (isset($byDate[$key])) {
-                    $byDate[$key]['isAvailable']         = $isFree;
-                    $byDate[$key]['isCheckInAvailable']  = $isFree;
+                    $byDate[$key]['isAvailable'] = $isFree;
+                    $byDate[$key]['isCheckInAvailable'] = $isFree;
                     $byDate[$key]['isCheckOutAvailable'] = $isFree;
-                    $byDate[$key]['minimalStay']         = $minStay > 0 ? $minStay : 1;
-                    $byDate[$key]['_covered']            = true;
+                    $byDate[$key]['minimalStay'] = $minStay > 0 ? $minStay : 1;
+                    $byDate[$key]['_covered'] = true;
                 }
                 $c = $c->modify('+1 day');
             }
         }
 
         // ---- 4. report coverage gaps ---------------------------------------
-        $gaps = array_keys(array_filter($byDate, fn($d) => !$d['_covered']));
+        $gaps = array_keys(array_filter($byDate, fn ($d) => ! $d['_covered']));
         if ($gaps !== []) {
             Log::info('Lodgify availability had uncovered days (treated as booked)', [
                 'gap_count' => count($gaps),
@@ -368,6 +384,7 @@ class LodgifyClient
             'houseId' => (string) $propertyId,
         ]);
         $this->assertOk($response, "getRateSettings:{$propertyId}");
+
         return $response->json() ?? [];
     }
 
@@ -382,6 +399,7 @@ class LodgifyClient
             "{$this->checkoutUrl}/api/v1/checkout/{$propertyId}"
         );
         $this->assertOk($response, "getPublicRates:{$propertyId}");
+
         return $response->json() ?? [];
     }
 
@@ -406,6 +424,7 @@ class LodgifyClient
 
         $response = $this->http()->get("{$this->baseUrl}/v2/rates/calendar", $query);
         $this->assertOk($response, "getRatesCalendar:{$propertyId}");
+
         return $response->json() ?? [];
     }
 
@@ -424,40 +443,40 @@ class LodgifyClient
     ): array {
         return match ($style) {
             'pascal' => array_filter([
-                'HouseId'    => (string) $propertyId,
+                'HouseId' => (string) $propertyId,
                 'RoomTypeId' => $roomTypeId !== null ? (string) $roomTypeId : null,
-                'StartDate'  => $startDate,
-                'EndDate'    => $endDate,
+                'StartDate' => $startDate,
+                'EndDate' => $endDate,
             ]),
             'pascal_property' => array_filter([
                 'PropertyId' => (string) $propertyId,
                 'RoomTypeId' => $roomTypeId !== null ? (string) $roomTypeId : null,
-                'StartDate'  => $startDate,
-                'EndDate'    => $endDate,
+                'StartDate' => $startDate,
+                'EndDate' => $endDate,
             ]),
             'snake' => array_filter([
-                'house_id'     => (string) $propertyId,
+                'house_id' => (string) $propertyId,
                 'room_type_id' => $roomTypeId !== null ? (string) $roomTypeId : null,
-                'start_date'   => $startDate,
-                'end_date'     => $endDate,
+                'start_date' => $startDate,
+                'end_date' => $endDate,
             ]),
             'camel' => array_filter([
-                'houseId'    => (string) $propertyId,
+                'houseId' => (string) $propertyId,
                 'roomTypeId' => $roomTypeId !== null ? (string) $roomTypeId : null,
-                'startDate'  => $startDate,
-                'endDate'    => $endDate,
+                'startDate' => $startDate,
+                'endDate' => $endDate,
             ]),
             'camel_property' => array_filter([
                 'propertyId' => (string) $propertyId,
                 'roomTypeId' => $roomTypeId !== null ? (string) $roomTypeId : null,
-                'startDate'  => $startDate,
-                'endDate'    => $endDate,
+                'startDate' => $startDate,
+                'endDate' => $endDate,
             ]),
             default => array_filter([
                 'propertyId' => (string) $propertyId,
                 'roomTypeId' => $roomTypeId !== null ? (string) $roomTypeId : null,
-                'start'      => $startDate,
-                'end'        => $endDate,
+                'start' => $startDate,
+                'end' => $endDate,
             ]),
         };
     }
@@ -485,13 +504,13 @@ class LodgifyClient
             $q = $this->ratesCalendarQuery($style, $propertyId, $roomTypeId, $startDate, $endDate);
             $r = $this->http()->get("{$this->baseUrl}/v2/rates/calendar", $q);
             $results[] = [
-                'style'      => $style,
-                'with_room'  => true,
-                'params'     => array_keys($q),
-                'url'        => "{$this->baseUrl}/v2/rates/calendar?" . http_build_query($q),
-                'status'     => $r->status(),
-                'ok'         => $r->successful(),
-                'body'       => $r->successful()
+                'style' => $style,
+                'with_room' => true,
+                'params' => array_keys($q),
+                'url' => "{$this->baseUrl}/v2/rates/calendar?".http_build_query($q),
+                'status' => $r->status(),
+                'ok' => $r->successful(),
+                'body' => $r->successful()
                     ? mb_substr((string) json_encode($r->json()), 0, 900)
                     : mb_substr($r->body(), 0, 220),
             ];
@@ -500,12 +519,12 @@ class LodgifyClient
             $q2 = $this->ratesCalendarQuery($style, $propertyId, null, $startDate, $endDate);
             $r2 = $this->http()->get("{$this->baseUrl}/v2/rates/calendar", $q2);
             $results[] = [
-                'style'      => $style,
-                'with_room'  => false,
-                'params'     => array_keys($q2),
-                'status'     => $r2->status(),
-                'ok'         => $r2->successful(),
-                'body'       => $r2->successful()
+                'style' => $style,
+                'with_room' => false,
+                'params' => array_keys($q2),
+                'status' => $r2->status(),
+                'ok' => $r2->successful(),
+                'body' => $r2->successful()
                     ? mb_substr((string) json_encode($r2->json()), 0, 400)
                     : mb_substr($r2->body(), 0, 160),
             ];
@@ -532,7 +551,7 @@ class LodgifyClient
     ): array {
         $query = [
             'propertyId' => (string) $propertyId,
-            'startDate'  => $startDate,
+            'startDate' => $startDate,
         ];
         if ($roomId !== null) {
             $query['roomId'] = (string) $roomId;
@@ -545,6 +564,7 @@ class LodgifyClient
 
         $this->assertOk($response, "getPublicCalendar:{$propertyId}");
         $body = $response->json();
+
         return $body['calendar'] ?? [];
     }
 
@@ -578,15 +598,15 @@ class LodgifyClient
         array $addOnIds = [],
     ): array {
         $query = [
-            'arrival'                   => $arrival,
-            'departure'                 => $departure,
-            'guest_breakdown[adults]'   => $adults,
+            'arrival' => $arrival,
+            'departure' => $departure,
+            'guest_breakdown[adults]' => $adults,
             'guest_breakdown[children]' => $children,
-            'guest_breakdown[pets]'     => $pets,
+            'guest_breakdown[pets]' => $pets,
         ];
 
         if ($roomTypeId !== null) {
-            $query['roomTypes[0].Id']     = (string) $roomTypeId;
+            $query['roomTypes[0].Id'] = (string) $roomTypeId;
             $query['roomTypes[0].People'] = $adults + $children;
         }
 
@@ -599,6 +619,7 @@ class LodgifyClient
         $this->assertOk($response, "getQuote:{$propertyId}");
 
         $json = $response->json() ?? [];
+
         // The endpoint returns a LIST with one quote per room-type combination.
         return array_is_list($json) ? ($json[0] ?? []) : $json;
     }
@@ -615,14 +636,15 @@ class LodgifyClient
             "{$this->checkoutUrl}/api/v1/checkout/price",
             [
                 'propertyId' => (string) $propertyId,
-                'arrival'    => $arrival,
-                'departure'  => $departure,
-                'guests'     => $guests,
-                'currency'   => $currency,
-                'language'   => $language,
+                'arrival' => $arrival,
+                'departure' => $departure,
+                'guests' => $guests,
+                'currency' => $currency,
+                'language' => $language,
             ]
         );
         $this->assertOk($response, "getPublicCheckoutPrice:{$propertyId}");
+
         return $response->json() ?? [];
     }
 
@@ -642,9 +664,9 @@ class LodgifyClient
     {
         return Http::withHeaders([
             'X-ApiKey' => $this->apiKey,
-            'Accept'   => 'application/json',
+            'Accept' => 'application/json',
         ])->timeout((int) config('lodgify.write.timeout', 30))
-          ->asJson();
+            ->asJson();
     }
 
     /**
@@ -658,17 +680,27 @@ class LodgifyClient
      * The payload is built by LodgifyBookingWriter from a config-driven field map,
      * because the request-body field names are not verified against a live account.
      *
+     * RETURNS RAW DECODED JSON, not an array.
+     *
+     * Confirmed against a live account: this endpoint answers with a BARE INTEGER — the new
+     * reservation id, e.g. `17388658` — not an object. An `: array` return type here threw
+     * a TypeError *after* the HTTP call had already succeeded, which is the worst possible
+     * place to fail: Lodgify had created the reservation and we discarded its id.
+     *
+     * So the type is deliberately wide and LodgifyBookingWriter::extractBookingId() does the
+     * interpreting, since it already has to cope with several response envelopes.
+     *
      * @param  array<string, mixed>  $payload
-     * @return array<string, mixed>
+     * @return array<string, mixed>|int|string|null
      */
-    public function createBooking(array $payload): array
+    public function createBooking(array $payload): mixed
     {
         $path = (string) config('lodgify.write.create_booking_path', '/v1/reservation/booking');
 
         $response = $this->writeHttp()->post("{$this->baseUrl}{$path}", $payload);
         $this->assertOk($response, 'createBooking');
 
-        return $response->json() ?? [];
+        return $response->json();
     }
 
     /**
@@ -678,10 +710,13 @@ class LodgifyClient
      * availability calendar accordingly" — i.e. THIS is the call that actually blocks the
      * dates. Until it succeeds the reservation is Open and the nights remain sellable.
      *
+     * Returns raw decoded JSON for the same reason as createBooking(): these v1 write
+     * routes do not reliably answer with an object, and an empty 200 body is normal.
+     *
      * @param  array<string, mixed>  $payload
-     * @return array<string, mixed>
+     * @return array<string, mixed>|int|string|null
      */
-    public function markBookingBooked(int|string $bookingId, array $payload = []): array
+    public function markBookingBooked(int|string $bookingId, array $payload = []): mixed
     {
         $path = str_replace(
             '{id}',
@@ -692,7 +727,7 @@ class LodgifyClient
         $response = $this->writeHttp()->put("{$this->baseUrl}{$path}", $payload);
         $this->assertOk($response, "markBookingBooked:{$bookingId}");
 
-        return $response->json() ?? [];
+        return $response->json();
     }
 
     /**
@@ -703,15 +738,19 @@ class LodgifyClient
      * URL and POSTing money-shaped data at it is worse than not trying. The caller
      * treats a null return as "not recorded" and surfaces it to an admin.
      *
+     * Returns `false` — not null — when no endpoint is configured, so the caller can tell
+     * "we deliberately did not call" apart from "we called and Lodgify returned an empty
+     * body", which a nullable return would have conflated.
+     *
      * @param  array<string, mixed>  $payload
-     * @return array<string, mixed>|null  null when no endpoint is configured
+     * @return array<string, mixed>|int|string|null|false false when no endpoint is configured
      */
-    public function recordBookingPayment(int|string $bookingId, array $payload): ?array
+    public function recordBookingPayment(int|string $bookingId, array $payload): mixed
     {
         $configured = config('lodgify.write.record_payment_path');
 
         if (blank($configured)) {
-            return null;
+            return false;
         }
 
         $path = str_replace('{id}', rawurlencode((string) $bookingId), (string) $configured);
@@ -719,16 +758,16 @@ class LodgifyClient
         $response = $this->writeHttp()->post("{$this->baseUrl}{$path}", $payload);
         $this->assertOk($response, "recordBookingPayment:{$bookingId}");
 
-        return $response->json() ?? [];
+        return $response->json();
     }
 
     /**
      * Delete/release a reservation, used when an unpaid deposit link lapses so the
      * nights go back on sale.
      *
-     * @return array<string, mixed>
+     * @return array<string, mixed>|int|string|null
      */
-    public function deleteBooking(int|string $bookingId): array
+    public function deleteBooking(int|string $bookingId): mixed
     {
         $path = str_replace(
             '{id}',
@@ -739,7 +778,7 @@ class LodgifyClient
         $response = $this->writeHttp()->delete("{$this->baseUrl}{$path}");
         $this->assertOk($response, "deleteBooking:{$bookingId}");
 
-        return $response->json() ?? [];
+        return $response->json();
     }
 
     /**
@@ -759,60 +798,60 @@ class LodgifyClient
     public function probeBookingWrite(array $base): array
     {
         $path = (string) config('lodgify.write.create_booking_path', '/v1/reservation/booking');
-        $url  = "{$this->baseUrl}{$path}";
+        $url = "{$this->baseUrl}{$path}";
 
         $guest = [
-            'name'         => 'API PROBE — DELETE ME',
-            'email'        => 'api-probe@example.invalid',
-            'phone'        => '+10000000000',
+            'name' => 'API PROBE — DELETE ME',
+            'email' => 'api-probe@example.invalid',
+            'phone' => '+10000000000',
             'country_code' => 'CA',
         ];
 
         $candidates = [
             'snake_case + nested guest' => [
                 'property_id' => $base['property_id'],
-                'arrival'     => $base['arrival'],
-                'departure'   => $base['departure'],
-                'status'      => 'Open',
-                'source'      => 'Website',
-                'guest'       => $guest,
-                'rooms'       => [['room_type_id' => $base['room_type_id'], 'people' => 2]],
+                'arrival' => $base['arrival'],
+                'departure' => $base['departure'],
+                'status' => 'Open',
+                'source' => 'Website',
+                'guest' => $guest,
+                'rooms' => [['room_type_id' => $base['room_type_id'], 'people' => 2]],
             ],
             'snake_case, flat guest' => [
-                'property_id'  => $base['property_id'],
-                'arrival'      => $base['arrival'],
-                'departure'    => $base['departure'],
-                'status'       => 'Open',
-                'guest_name'   => $guest['name'],
-                'guest_email'  => $guest['email'],
-                'rooms'        => [['room_type_id' => $base['room_type_id'], 'people' => 2]],
+                'property_id' => $base['property_id'],
+                'arrival' => $base['arrival'],
+                'departure' => $base['departure'],
+                'status' => 'Open',
+                'guest_name' => $guest['name'],
+                'guest_email' => $guest['email'],
+                'rooms' => [['room_type_id' => $base['room_type_id'], 'people' => 2]],
             ],
             'PascalCase' => [
                 'PropertyId' => $base['property_id'],
-                'Arrival'    => $base['arrival'],
-                'Departure'  => $base['departure'],
-                'Status'     => 'Open',
-                'Guest'      => [
-                    'Name'  => $guest['name'],
+                'Arrival' => $base['arrival'],
+                'Departure' => $base['departure'],
+                'Status' => 'Open',
+                'Guest' => [
+                    'Name' => $guest['name'],
                     'Email' => $guest['email'],
                 ],
-                'Rooms'      => [['RoomTypeId' => $base['room_type_id'], 'People' => 2]],
+                'Rooms' => [['RoomTypeId' => $base['room_type_id'], 'People' => 2]],
             ],
             'camelCase' => [
                 'propertyId' => $base['property_id'],
-                'arrival'    => $base['arrival'],
-                'departure'  => $base['departure'],
-                'status'     => 'Open',
-                'guest'      => $guest,
-                'rooms'      => [['roomTypeId' => $base['room_type_id'], 'people' => 2]],
+                'arrival' => $base['arrival'],
+                'departure' => $base['departure'],
+                'status' => 'Open',
+                'guest' => $guest,
+                'rooms' => [['roomTypeId' => $base['room_type_id'], 'people' => 2]],
             ],
             'houseId naming' => [
-                'house_id'     => $base['property_id'],
+                'house_id' => $base['property_id'],
                 'room_type_id' => $base['room_type_id'],
-                'arrival'      => $base['arrival'],
-                'departure'    => $base['departure'],
-                'status'       => 'Open',
-                'guest'        => $guest,
+                'arrival' => $base['arrival'],
+                'departure' => $base['departure'],
+                'status' => 'Open',
+                'guest' => $guest,
             ],
         ];
 
@@ -820,19 +859,24 @@ class LodgifyClient
 
         foreach ($candidates as $label => $payload) {
             $response = $this->writeHttp()->post($url, $payload);
-            $json     = $response->successful() ? $response->json() : null;
+            $json = $response->successful() ? $response->json() : null;
 
             $results[] = [
-                'attempt'        => $label,
-                'url'            => $url,
-                'status'         => $response->status(),
-                'ok'             => $response->successful(),
-                'sent'           => $payload,
+                'attempt' => $label,
+                'url' => $url,
+                'status' => $response->status(),
+                'ok' => $response->successful(),
+                'sent' => $payload,
                 // On success this is the created reservation — including its id, which
                 // is what you need to delete it again.
-                'response'       => $json,
-                'created_id'     => is_array($json) ? ($json['id'] ?? $json['booking_id'] ?? null) : null,
-                'body_excerpt'   => $response->successful() ? null : mb_substr($response->body(), 0, 400),
+                'response' => $json,
+                // A bare int/string IS the id — see createBooking().
+                'created_id' => match (true) {
+                    is_int($json), is_string($json) && $json !== '' => $json,
+                    is_array($json) => $json['id'] ?? $json['booking_id'] ?? null,
+                    default => null,
+                },
+                'body_excerpt' => $response->successful() ? null : mb_substr($response->body(), 0, 400),
             ];
 
             // Stop at the first shape Lodgify accepts — no reason to create more.
@@ -848,6 +892,7 @@ class LodgifyClient
     {
         $response = $this->http()->get("{$this->baseUrl}/v2/reservations/bookings/{$bookingId}");
         $this->assertOk($response, "getBooking:{$bookingId}");
+
         return $response->json() ?? [];
     }
 
@@ -863,38 +908,38 @@ class LodgifyClient
     public function diagnose(int|string $samplePropertyId): array
     {
         $out = [
-            'has_api_key'  => $this->apiKey !== '',
-            'base_url'     => $this->baseUrl,
+            'has_api_key' => $this->apiKey !== '',
+            'base_url' => $this->baseUrl,
             'checkout_url' => $this->checkoutUrl,
         ];
 
         $auth = $this->http()->get("{$this->baseUrl}/v2/properties", ['size' => 1]);
         $out['authenticated_properties'] = [
             'status' => $auth->status(),
-            'ok'     => $auth->successful(),
-            'body'   => $auth->successful() ? 'ok' : mb_substr($auth->body(), 0, 300),
+            'ok' => $auth->successful(),
+            'body' => $auth->successful() ? 'ok' : mb_substr($auth->body(), 0, 300),
         ];
 
         $pub = $this->publicHttp()->get("{$this->checkoutUrl}/api/v1/checkout/calendar", [
             'propertyId' => (string) $samplePropertyId,
-            'startDate'  => now()->toDateString(),
+            'startDate' => now()->toDateString(),
         ]);
         $out['public_checkout_calendar'] = [
             'status' => $pub->status(),
-            'ok'     => $pub->successful(),
+            'ok' => $pub->successful(),
             'server' => $pub->header('Server'),
             'cf_ray' => $pub->header('Cf-Ray'),
-            'body'   => $pub->successful() ? 'ok' : mb_substr($pub->body(), 0, 300),
+            'body' => $pub->successful() ? 'ok' : mb_substr($pub->body(), 0, 300),
         ];
 
         $avail = $this->http()->get("{$this->baseUrl}/v2/availability/{$samplePropertyId}", [
             'start' => now()->toDateString(),
-            'end'   => now()->addDays(30)->toDateString(),
+            'end' => now()->addDays(30)->toDateString(),
         ]);
         $out['authenticated_availability'] = [
             'status' => $avail->status(),
-            'ok'     => $avail->successful(),
-            'body'   => $avail->successful()
+            'ok' => $avail->successful(),
+            'body' => $avail->successful()
                 ? mb_substr((string) json_encode($avail->json()), 0, 500)
                 : mb_substr($avail->body(), 0, 300),
         ];
@@ -945,6 +990,7 @@ class LodgifyClient
             }
         }
         Log::warning('Lodgify v3 images: no transport authorised', ['property' => $propertyId]);
+
         return [];
     }
 
@@ -966,15 +1012,15 @@ class LodgifyClient
 
         $transports = [
             // 1. no credentials, browser-like headers
-            'public' => fn() => $this->publicHttp()->get($url),
+            'public' => fn () => $this->publicHttp()->get($url),
 
             // 2. the Public API key, in case v3 accepts it
-            'api-key' => fn() => $this->publicHttp()
+            'api-key' => fn () => $this->publicHttp()
                 ->withHeaders(['X-ApiKey' => $this->apiKey])
                 ->get($url),
 
             // 3. API key as a bearer token
-            'bearer-api-key' => fn() => $this->publicHttp()
+            'bearer-api-key' => fn () => $this->publicHttp()
                 ->withToken($this->apiKey)
                 ->get($url),
         ];
@@ -984,7 +1030,7 @@ class LodgifyClient
         //    this — it is a session credential, not an API credential.
         $cookie = (string) config('lodgify.dashboard_cookie', '');
         if ($cookie !== '') {
-            $transports['session-cookie'] = fn() => $this->publicHttp()
+            $transports['session-cookie'] = fn () => $this->publicHttp()
                 ->withHeaders(['Cookie' => $cookie])
                 ->get($url);
         }
@@ -995,13 +1041,14 @@ class LodgifyClient
                 $response = $call();
             } catch (\Throwable $e) {
                 $results[] = [
-                    'label'      => $label,
-                    'status'     => 0,
-                    'success'    => false,
+                    'label' => $label,
+                    'status' => 0,
+                    'success' => false,
                     'statusCode' => null,
-                    'message'    => $e->getMessage(),
-                    'json'       => [],
+                    'message' => $e->getMessage(),
+                    'json' => [],
                 ];
+
                 continue;
             }
 
@@ -1010,15 +1057,15 @@ class LodgifyClient
             // Body-level success is authoritative here, not the HTTP status.
             $ok = $response->successful()
                 && ($json['success'] ?? false) === true
-                && !empty($json['data']);
+                && ! empty($json['data']);
 
             $results[] = [
-                'label'      => $label,
-                'status'     => $response->status(),
-                'success'    => $ok,
+                'label' => $label,
+                'status' => $response->status(),
+                'success' => $ok,
                 'statusCode' => $json['statusCode'] ?? null,
-                'message'    => $json['message'] ?? null,
-                'json'       => $ok ? $json : [],
+                'message' => $json['message'] ?? null,
+                'json' => $ok ? $json : [],
             ];
 
             if ($ok) {
@@ -1041,13 +1088,15 @@ class LodgifyClient
             ->withHeaders(['Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'])
             ->get($url);
 
-        if (!$response->successful()) {
+        if (! $response->successful()) {
             Log::warning('Lodgify public page returned non-200', [
                 'url' => $url,
                 'status' => $response->status(),
             ]);
+
             return null;
         }
+
         return $response->body();
     }
 
@@ -1090,19 +1139,19 @@ class LodgifyClient
             $client = $transport === 'auth' ? $this->http() : $this->publicHttp();
             $r = $client->get($url, $query);
 
-            $json   = $r->successful() ? $r->json() : null;
-            $found  = is_array($json) ? $this->harvestImageUrls($json) : [];
+            $json = $r->successful() ? $r->json() : null;
+            $found = is_array($json) ? $this->harvestImageUrls($json) : [];
 
             $results[] = [
-                'transport'   => $transport === 'auth' ? 'authenticated' : 'public',
-                'url'         => $url . ($query ? '?' . http_build_query($query) : ''),
-                'status'      => $r->status(),
-                'ok'          => $r->successful(),
+                'transport' => $transport === 'auth' ? 'authenticated' : 'public',
+                'url' => $url.($query ? '?'.http_build_query($query) : ''),
+                'status' => $r->status(),
+                'ok' => $r->successful(),
                 'image_count' => count($found),
-                'images'      => array_slice($found, 0, 12),
+                'images' => array_slice($found, 0, 12),
                 'top_level_keys' => is_array($json)
                     ? (array_is_list($json)
-                        ? ['(list of ' . count($json) . ')'] + array_keys(is_array($json[0] ?? null) ? $json[0] : [])
+                        ? ['(list of '.count($json).')'] + array_keys(is_array($json[0] ?? null) ? $json[0] : [])
                         : array_keys($json))
                     : null,
                 'body_excerpt' => $r->successful() ? null : mb_substr($r->body(), 0, 200),
@@ -1113,21 +1162,22 @@ class LodgifyClient
         foreach ($this->v3ImageAttempts($propertyId) as $attempt) {
             $found = $attempt['success'] ? $this->harvestV3Ids($attempt['json']) : [];
             $results[] = [
-                'transport'   => 'v3/' . $attempt['label'],
-                'url'         => "{$this->propertyUrl}/api/v3/property/{$propertyId}/images/all",
-                'status'      => $attempt['status'],
-                'ok'          => $attempt['success'],
+                'transport' => 'v3/'.$attempt['label'],
+                'url' => "{$this->propertyUrl}/api/v3/property/{$propertyId}/images/all",
+                'status' => $attempt['status'],
+                'ok' => $attempt['success'],
                 'image_count' => count($found),
-                'images'      => array_slice($found, 0, 12),
+                'images' => array_slice($found, 0, 12),
                 'top_level_keys' => $attempt['success'] ? ['success', 'statusCode', 'data'] : null,
                 'body_excerpt' => $attempt['success']
                     ? null
-                    : trim(($attempt['statusCode'] ?? '') . ' ' . ($attempt['message'] ?? '')),
+                    : trim(($attempt['statusCode'] ?? '').' '.($attempt['message'] ?? '')),
             ];
         }
 
         // best first
-        usort($results, fn($a, $b) => $b['image_count'] <=> $a['image_count']);
+        usort($results, fn ($a, $b) => $b['image_count'] <=> $a['image_count']);
+
         return $results;
     }
 
@@ -1139,19 +1189,20 @@ class LodgifyClient
     public function harvestV3Ids(array $payload): array
     {
         $data = $payload['data'] ?? [];
-        $ids  = [];
+        $ids = [];
         foreach ((array) ($data['property']['images'] ?? []) as $img) {
-            if (is_array($img) && !empty($img['id'])) {
+            if (is_array($img) && ! empty($img['id'])) {
                 $ids[] = (string) $img['id'];
             }
         }
         foreach ((array) ($data['roomTypes'] ?? []) as $rt) {
             foreach ((array) ($rt['images'] ?? []) as $img) {
-                if (is_array($img) && !empty($img['id'])) {
+                if (is_array($img) && ! empty($img['id'])) {
                     $ids[] = (string) $img['id'];
                 }
             }
         }
+
         return array_values(array_unique($ids));
     }
 
@@ -1164,7 +1215,7 @@ class LodgifyClient
      */
     public function harvestImageUrls(mixed $node, int $depth = 0): array
     {
-        if ($depth > 8 || !is_array($node)) {
+        if ($depth > 8 || ! is_array($node)) {
             return [];
         }
 
@@ -1178,6 +1229,7 @@ class LodgifyClient
                 if ($looksLikeUrl && ($looksLikeKey || str_contains($value, 'icdbcdn'))) {
                     $out[] = $value;
                 }
+
                 continue;
             }
             $out = array_merge($out, $this->harvestImageUrls($value, $depth + 1));
@@ -1196,60 +1248,60 @@ class LodgifyClient
     public function raw(string $what, int|string $id, array $extra = []): array
     {
         [$url, $query, $useAuth] = match ($what) {
-            'properties'   => ["{$this->baseUrl}/v2/properties", ['includeInOut' => 'true'], true],
-            'property'     => ["{$this->baseUrl}/v2/properties/{$id}", [], true],
-            'rooms'        => ["{$this->baseUrl}/v2/properties/{$id}/rooms", [], true],
-            'images-v3'    => ["{$this->propertyUrl}/api/v3/property/{$id}/images/all", [], false],
-            'property-v1'  => ["{$this->baseUrl}/v1/properties/{$id}", [], true],
-            'room-v1'      => ["{$this->baseUrl}/v1/properties/{$id}/rooms/" . ($extra['roomId'] ?? 0), [], true],
-            'addons'       => ["{$this->baseUrl}/v1/properties/{$id}/rates/addons", [], true],
-            'payments'     => ["{$this->baseUrl}/v1/properties/{$id}/payments", [], true],
+            'properties' => ["{$this->baseUrl}/v2/properties", ['includeInOut' => 'true'], true],
+            'property' => ["{$this->baseUrl}/v2/properties/{$id}", [], true],
+            'rooms' => ["{$this->baseUrl}/v2/properties/{$id}/rooms", [], true],
+            'images-v3' => ["{$this->propertyUrl}/api/v3/property/{$id}/images/all", [], false],
+            'property-v1' => ["{$this->baseUrl}/v1/properties/{$id}", [], true],
+            'room-v1' => ["{$this->baseUrl}/v1/properties/{$id}/rooms/".($extra['roomId'] ?? 0), [], true],
+            'addons' => ["{$this->baseUrl}/v1/properties/{$id}/rates/addons", [], true],
+            'payments' => ["{$this->baseUrl}/v1/properties/{$id}/payments", [], true],
             'availability' => ["{$this->baseUrl}/v2/availability/{$id}", [
                 'start' => $extra['start'] ?? now()->toDateString(),
-                'end'   => $extra['end']   ?? now()->addDays(30)->toDateString(),
+                'end' => $extra['end'] ?? now()->addDays(30)->toDateString(),
             ], true],
             'rate-settings' => ["{$this->baseUrl}/v2/rates/settings", ['houseId' => (string) $id], true],
             'public-rates' => ["{$this->checkoutUrl}/api/v1/checkout/{$id}", [], false],
-            'rates'        => [
+            'rates' => [
                 "{$this->baseUrl}/v2/rates/calendar",
                 $this->ratesCalendarQuery(
                     (string) ($extra['style'] ?? config('lodgify.rates_param_style', 'pascal')),
                     $id,
                     $extra['roomTypeId'] ?? null,
                     $extra['start'] ?? now()->toDateString(),
-                    $extra['end']   ?? now()->addDays(30)->toDateString(),
+                    $extra['end'] ?? now()->addDays(30)->toDateString(),
                 ),
-                true
+                true,
             ],
-            'quote'        => ["{$this->baseUrl}/v2/quote/{$id}", [
-                'arrival'   => $extra['arrival']   ?? now()->addDays(30)->toDateString(),
+            'quote' => ["{$this->baseUrl}/v2/quote/{$id}", [
+                'arrival' => $extra['arrival'] ?? now()->addDays(30)->toDateString(),
                 'departure' => $extra['departure'] ?? now()->addDays(32)->toDateString(),
                 'guest_breakdown[adults]' => $extra['adults'] ?? 2,
             ], true],
-            'calendar'     => ["{$this->checkoutUrl}/api/v1/checkout/calendar", array_filter([
+            'calendar' => ["{$this->checkoutUrl}/api/v1/checkout/calendar", array_filter([
                 'propertyId' => (string) $id,
-                'startDate'  => $extra['start'] ?? now()->toDateString(),
-                'roomId'     => $extra['roomId'] ?? null,
+                'startDate' => $extra['start'] ?? now()->toDateString(),
+                'roomId' => $extra['roomId'] ?? null,
             ]), false],
-            'price'        => ["{$this->checkoutUrl}/api/v1/checkout/price", [
+            'price' => ["{$this->checkoutUrl}/api/v1/checkout/price", [
                 'propertyId' => (string) $id,
-                'arrival'    => $extra['arrival']   ?? now()->addDays(30)->toDateString(),
-                'departure'  => $extra['departure'] ?? now()->addDays(32)->toDateString(),
-                'guests'     => $extra['guests']    ?? 2,
-                'currency'   => $extra['currency']  ?? 'CAD',
-                'language'   => 'EN',
+                'arrival' => $extra['arrival'] ?? now()->addDays(30)->toDateString(),
+                'departure' => $extra['departure'] ?? now()->addDays(32)->toDateString(),
+                'guests' => $extra['guests'] ?? 2,
+                'currency' => $extra['currency'] ?? 'CAD',
+                'language' => 'EN',
             ], false],
-            default        => throw new \InvalidArgumentException("Unknown raw target: {$what}"),
+            default => throw new \InvalidArgumentException("Unknown raw target: {$what}"),
         };
 
         $response = ($useAuth ? $this->http() : $this->publicHttp())->get($url, $query);
 
         return [
-            'url'          => $url . (empty($query) ? '' : '?' . http_build_query($query)),
-            'transport'    => $useAuth ? 'authenticated (X-ApiKey)' : 'public checkout',
-            'status'       => $response->status(),
-            'ok'           => $response->successful(),
-            'json'         => $response->successful() ? $response->json() : null,
+            'url' => $url.(empty($query) ? '' : '?'.http_build_query($query)),
+            'transport' => $useAuth ? 'authenticated (X-ApiKey)' : 'public checkout',
+            'status' => $response->status(),
+            'ok' => $response->successful(),
+            'json' => $response->successful() ? $response->json() : null,
             'body_excerpt' => $response->successful() ? '' : mb_substr($response->body(), 0, 500),
         ];
     }
@@ -1257,10 +1309,11 @@ class LodgifyClient
     public function ping(): array
     {
         $response = $this->http()->get("{$this->baseUrl}/v2/properties", ['size' => 1]);
+
         return [
-            'ok'          => $response->successful(),
-            'status'      => $response->status(),
-            'base_url'    => $this->baseUrl,
+            'ok' => $response->successful(),
+            'status' => $response->status(),
+            'base_url' => $this->baseUrl,
             'has_api_key' => $this->apiKey !== '',
         ];
     }
@@ -1276,7 +1329,7 @@ class LodgifyClient
             'status' => $response->status(),
             'server' => $response->header('Server'),
             'cf_ray' => $response->header('Cf-Ray'),
-            'body'   => mb_substr($response->body(), 0, 500),
+            'body' => mb_substr($response->body(), 0, 500),
         ]);
         throw new LodgifyApiException(
             "Lodgify [{$context}] failed: HTTP {$response->status()}",
@@ -1285,10 +1338,9 @@ class LodgifyClient
         );
     }
 
-
-// =========================================================================
-// Reservations (read-only)
-// =========================================================================
+    // =========================================================================
+    // Reservations (read-only)
+    // =========================================================================
 
     /**
      * List bookings.
@@ -1300,28 +1352,27 @@ class LodgifyClient
      * /v2/rates/calendar wanted PascalCase while /v2/quote wanted ASP.NET dot
      * notation, so nothing here should be assumed.
      *
-     * @param array<string, mixed> $filters
+     * @param  array<string, mixed>  $filters
      */
     public function listBookings(array $filters = []): array
     {
         $query = array_filter([
-            'page'           => $filters['page'] ?? 1,
-            'size'           => $filters['size'] ?? 50,
-            'includeCount'   => 'true',
+            'page' => $filters['page'] ?? 1,
+            'size' => $filters['size'] ?? 50,
+            'includeCount' => 'true',
             // Server-side filters, if supported. Anything unsupported is simply
             // ignored by Lodgify and filtered again on our side.
-            'stayFilter'     => $filters['stay'] ?? null,        // Upcoming|Current|Historic|All
-            'trash'          => 'false',
-            'houseId'        => $filters['property_id'] ?? null,
-            'updatedSince'   => $filters['updated_since'] ?? null,
-        ], fn($v) => $v !== null && $v !== '');
+            'stayFilter' => $filters['stay'] ?? null,        // Upcoming|Current|Historic|All
+            'trash' => 'false',
+            'houseId' => $filters['property_id'] ?? null,
+            'updatedSince' => $filters['updated_since'] ?? null,
+        ], fn ($v) => $v !== null && $v !== '');
 
         $response = $this->http()->get("{$this->baseUrl}/v2/reservations/bookings", $query);
         $this->assertOk($response, 'listBookings');
 
         return $response->json() ?? [];
     }
-
 
     /**
      * Discover the reservations endpoint's real shape and supported filters.
@@ -1337,13 +1388,13 @@ class LodgifyClient
         $url = "{$this->baseUrl}/v2/reservations/bookings";
 
         $attempts = [
-            'bare'                 => [],
-            'paged'                => ['page' => 1, 'size' => 5],
-            'stayFilter=Upcoming'  => ['stayFilter' => 'Upcoming', 'size' => 5],
-            'stayFilter=All'       => ['stayFilter' => 'All', 'size' => 5],
-            'PascalCase paging'    => ['Page' => 1, 'Size' => 5],
-            'includeCount'         => ['size' => 5, 'includeCount' => 'true'],
-            'v1 path'              => null,   // handled below
+            'bare' => [],
+            'paged' => ['page' => 1, 'size' => 5],
+            'stayFilter=Upcoming' => ['stayFilter' => 'Upcoming', 'size' => 5],
+            'stayFilter=All' => ['stayFilter' => 'All', 'size' => 5],
+            'PascalCase paging' => ['Page' => 1, 'Size' => 5],
+            'includeCount' => ['size' => 5, 'includeCount' => 'true'],
+            'v1 path' => null,   // handled below
         ];
 
         $results = [];
@@ -1373,16 +1424,16 @@ class LodgifyClient
             }
 
             $results[] = [
-                'attempt'        => $label,
-                'url'            => $target . ($query ? '?' . http_build_query($query) : ''),
-                'status'         => $response->status(),
-                'ok'             => $response->successful(),
-                'top_level_keys' => is_array($json) && !array_is_list($json) ? array_keys($json) : null,
-                'item_count'     => is_array($items) ? count($items) : null,
+                'attempt' => $label,
+                'url' => $target.($query ? '?'.http_build_query($query) : ''),
+                'status' => $response->status(),
+                'ok' => $response->successful(),
+                'top_level_keys' => is_array($json) && ! array_is_list($json) ? array_keys($json) : null,
+                'item_count' => is_array($items) ? count($items) : null,
                 // The single most useful thing: one real record, so field names
                 // stop being guesswork.
-                'first_item'     => is_array($items[0] ?? null) ? $items[0] : null,
-                'body_excerpt'   => $response->successful() ? null : mb_substr($response->body(), 0, 250),
+                'first_item' => is_array($items[0] ?? null) ? $items[0] : null,
+                'body_excerpt' => $response->successful() ? null : mb_substr($response->body(), 0, 250),
             ];
         }
 

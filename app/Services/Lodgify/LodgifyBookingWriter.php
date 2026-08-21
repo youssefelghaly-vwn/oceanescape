@@ -55,6 +55,39 @@ class LodgifyBookingWriter
                 moneyAtRisk: false,          // nothing charged at this point in the flow
                 responseExcerpt: mb_substr($e->responseBody, 0, 400),
             );
+        } catch (\Throwable $e) {
+            /*
+             * Anything that is NOT an API error reaching here means the HTTP call very
+             * probably SUCCEEDED and we fell over interpreting the response — so a real
+             * reservation may exist that we have no id for.
+             *
+             * This is not hypothetical: `createBooking()` was typed `: array` while the
+             * endpoint answers with a bare integer id, and the resulting TypeError fired
+             * after Lodgify had already created the reservation. Left uncaught it escaped
+             * as a raw TypeError, the booking row stayed `pending_lodgify`, and the
+             * orphaned reservation sat on the calendar with nothing pointing at it.
+             *
+             * Logged as critical because it needs a human to go and look.
+             */
+            Log::channel('booking')->critical(
+                'Lodgify create failed AFTER the request; a reservation may exist unlinked',
+                [
+                    'booking' => $booking->reference,
+                    'exception' => $e::class,
+                    'message' => $e->getMessage(),
+                    'cottage' => $booking->cottage_id,
+                    'arrival' => $booking->arrival?->toDateString(),
+                    'departure' => $booking->departure?->toDateString(),
+                ]
+            );
+
+            throw new LodgifyWriteFailed(
+                "Could not interpret Lodgify's response when creating {$booking->reference}: "
+                .$e->getMessage().' A reservation may exist and need manual reconciliation.',
+                operation: 'createOpenBooking',
+                moneyAtRisk: false,
+                responseExcerpt: $e::class,
+            );
         }
 
         $id = $this->extractBookingId($response);
@@ -113,6 +146,16 @@ class LodgifyBookingWriter
                 moneyAtRisk: true,
                 responseExcerpt: mb_substr($e->responseBody, 0, 400),
             );
+        } catch (\Throwable $e) {
+            // Same reasoning as createOpenBooking(), except the guest has already paid,
+            // so this must reach the retry-then-alert path rather than escaping raw.
+            throw new LodgifyWriteFailed(
+                "Unexpected failure marking reservation {$booking->lodgify_booking_id} booked: "
+                .$e->getMessage(),
+                operation: 'markBooked',
+                moneyAtRisk: true,
+                responseExcerpt: $e::class,
+            );
         }
 
         $this->log('lodgify.mark_booked.ok', $booking);
@@ -163,7 +206,8 @@ class LodgifyBookingWriter
             'amount' => $payment->amount()->format(),
         ]);
 
-        return $result !== null;
+        // false means "we deliberately did not call"; anything else means Lodgify answered.
+        return $result !== false;
     }
 
     /**
