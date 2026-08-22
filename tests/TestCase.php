@@ -11,11 +11,10 @@ abstract class TestCase extends BaseTestCase
         parent::setUp();
 
         /*
-         * Payments are off by default in config so the old Lodgify checkout stays live
-         * until deliberately switched. Tests for this feature need it on, plus fake Stripe
-         * credentials — never real ones, and never a live key in a test run.
+         * Fake Stripe credentials — never real ones, and never a live key in a test run.
+         * (There is no direct-payments flag any more: Lodgify's hosted checkout has been
+         * removed, so this is the only booking path there is.)
          */
-        config()->set('booking.direct_payments_enabled', true);
         config()->set('services.stripe.secret', 'sk_test_fake_for_tests');
         config()->set('services.stripe.webhook_secret', 'whsec_fake_for_tests');
         config()->set('booking.alert_email', 'ops@example.test');

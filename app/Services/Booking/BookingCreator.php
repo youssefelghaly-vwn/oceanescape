@@ -223,9 +223,8 @@ class BookingCreator
      *
      * A failure to CHECK is treated differently from a check that says no: if Lodgify is
      * unreachable we let the booking through, because Lodgify validates again when we
-     * create the reservation and will reject it there. That mirrors the reasoning already
-     * applied in BookingRedirectController — an availability check that cannot run must
-     * not become a blocker.
+     * create the reservation and will reject it there. An availability check that cannot
+     * run must not become a blocker — and nothing is charged at this point anyway.
      */
     protected function assertStillAvailable($cottage, Carbon $arrival, Carbon $departure): void
     {

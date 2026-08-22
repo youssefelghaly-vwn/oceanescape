@@ -43,11 +43,6 @@ class BookingController extends Controller
      */
     public function details(Request $request, string $slug): View|RedirectResponse
     {
-        if (! config('booking.direct_payments_enabled')) {
-            // Flag off: the hosted checkout is still the live path.
-            return redirect()->route('booking.redirect', ['slug' => $slug] + $request->query());
-        }
-
         $validated = $request->validate([
             'arrival' => ['required', 'date_format:Y-m-d', 'after_or_equal:today'],
             'departure' => ['required', 'date_format:Y-m-d', 'after:arrival'],
@@ -136,21 +131,6 @@ class BookingController extends Controller
      */
     public function store(StoreBookingRequest $request): RedirectResponse
     {
-        if (! config('booking.direct_payments_enabled')) {
-            /*
-             * Feature flag off: the old Lodgify hosted-checkout path is still the live
-             * one, so send the guest there rather than half-running this flow.
-             */
-            return redirect()->route('booking.redirect', array_filter([
-                'slug' => $request->input('slug'),
-                'arrival' => $request->input('arrival'),
-                'departure' => $request->input('departure'),
-                'adults' => $request->input('adults'),
-                'children' => $request->input('children'),
-                'pets' => $request->input('pets'),
-            ]));
-        }
-
         $data = $request->safe()->except('website_url', 'terms_accepted');
 
         try {

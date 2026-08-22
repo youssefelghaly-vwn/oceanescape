@@ -4,7 +4,14 @@ return [
     'api_key'  => env('LODGIFY_API_KEY'),
     'base_url' => env('LODGIFY_BASE_URL', 'https://api.lodgify.com'),
 
-    // Public checkout endpoints (no API key, but behind Cloudflare).
+    /*
+    | Public READ endpoints on checkout.lodgify.com (no API key, but behind Cloudflare):
+    | /api/v1/checkout/calendar, /api/v1/checkout/price, /api/v1/checkout/{id}.
+    |
+    | NOT the hosted checkout page. That is gone — see config/booking.php. This host is
+    | only ever called server-to-server as a data fallback when the authenticated v2 API
+    | fails; no guest is ever sent to it.
+    */
     'checkout_base_url' => env('LODGIFY_CHECKOUT_URL', 'https://checkout.lodgify.com'),
 
     /*
@@ -189,20 +196,15 @@ return [
     'nearby_window_days'       => (int) env('LODGIFY_NEARBY_WINDOW', 14),
     'limited_threshold'        => (int) env('LODGIFY_LIMITED_THRESHOLD', 2),
 
-    'checkout_slug' => env('LODGIFY_CHECKOUT_SLUG', 'scott-seely'),
-
     /*
-    | Currency for the checkout. Leave as CAD: passing something else makes the
-    | summary show a converted figure beside the rental's real price, which
-    | confuses more than it helps.
+    | REMOVED: checkout_slug, checkout_currency and checkout_grace_minutes.
+    |
+    | Those configured the hand-off to Lodgify's hosted checkout, which no longer exists in
+    | this project — payments are taken on our own site with Stripe. See config/booking.php.
+    | `checkout_base_url` above survives because it is a READ endpoint (public calendar and
+    | price data), not a payment page.
     */
-    'checkout_currency' => env('LODGIFY_CHECKOUT_CURRENCY', 'CAD'),
 
-    /*
-    | How long a redirect stays "in flight" before it counts as abandoned.
-    | Lodgify's checkout is three steps, so allow a generous window.
-    */
-    'checkout_grace_minutes' => (int) env('LODGIFY_CHECKOUT_GRACE', 90),
     'reservations' => (int) env('LODGIFY_CACHE_RESERVATIONS', 300),
 
     /*

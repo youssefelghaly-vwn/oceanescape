@@ -45,7 +45,6 @@ therefore run inside the **`web` middleware group** (cookies, session, CSRF veri
 | GET | `/api/cottage/{slug}/rates` | `throttle:120,1` | `RateController@month` | `api.cottage.rates` |
 | GET | `/api/cottage/{slug}/quote` | `throttle:120,1` | `RateController@quote` | `api.cottage.quote` |
 | GET | `/api/cottage/{slug}/addons` | `throttle:60,1` | `RateController@addons` | `api.cottage.addons` |
-| GET | `/book/{slug}` | `throttle:30,1` | `BookingRedirectController` (invokable) | `booking.redirect` |
 | GET | `/booking/details/{slug}` | `throttle:60,1` | `BookingController@details` | `booking.details` |
 | POST | `/booking` | `throttle:booking-create` | `BookingController@store` | `booking.store` |
 | GET | `/booking/submitted` | web | `BookingController@submitted` | `booking.submitted` |
@@ -95,7 +94,6 @@ therefore run inside the **`web` middleware group** (cookies, session, CSRF veri
 | PATCH | `/admin/photos/{guestPhoto}/approve` | `auth`,`admin` | `…@approve` | `admin.photos.approve` |
 | PATCH | `/admin/photos/{guestPhoto}/reject` | `auth`,`admin` | `…@reject` | `admin.photos.reject` |
 | DELETE | `/admin/photos/{guestPhoto}` | `auth`,`admin` | `…@destroy` | `admin.photos.destroy` |
-| GET | `/admin/checkouts` | `auth`,`admin` | `Admin\CheckoutIntentController@index` | `admin.checkouts.index` |
 | GET | `/admin/reservations` | `auth`,`admin` | `Admin\ReservationController@index` | `admin.reservations.index` |
 | POST | `/admin/reservations/refresh` | `auth`,`admin` | `…@refresh` | `admin.reservations.refresh` |
 | GET | `/admin/reservations/{id}` | `auth`,`admin` | `…@show` | `admin.reservations.show` |
@@ -696,108 +694,14 @@ subsequent quote requests (§7).
 
 ---
 
-# 9. Checkout handoff — `GET /book/{slug}`
+# 9. ~~Checkout handoff — `GET /book/{slug}`~~ — REMOVED
 
-> **Superseded when direct payments are on.** With
-> `BOOKING_DIRECT_PAYMENTS=true` the site takes the booking and the money itself via
-> `POST /booking`, and this route becomes the fallback path only. See
-> [`05-payments-and-booking.md`](05-payments-and-booking.md). Everything below still
-> describes the route accurately — it is unchanged, and it is what runs when the flag is
-> off.
+This route, `BookingRedirectController`, `LodgifyCheckout` and the `checkout_intents` table
+have all been deleted. Payments are taken on this site with Stripe and the reservation is
+mirrored into Lodgify by API; a guest is never sent to a Lodgify URL.
 
-**Route** `routes/web.php:171`, `throttle:30,1` → `BookingRedirectController::__invoke`
-(single-action controller)
-
-This is the **conversion boundary** of the whole application.
-
-### Validation
-
-```php
-'arrival'   => ['required','date_format:Y-m-d'],
-'departure' => ['required','date_format:Y-m-d','after:arrival'],
-'adults'    => ['sometimes','integer','min:1','max:20'],
-'children'  => ['sometimes','integer','min:0','max:20'],
-'pets'      => ['sometimes','integer','min:0','max:10'],
-'addons'    => ['sometimes','nullable','string','max:500'],   // "155688-1,155689-3"
-'total'     => ['sometimes','nullable','numeric','min:0'],
-```
-
-### Flow
-
-```
- 1. $cottage = cottageBySlug($slug)              → 404 if missing
-
- 2. if (!LodgifyCheckout::isConfigured())        // lodgify.checkout_slug is blank
-      Log::error('Lodgify checkout slug is not configured; cannot redirect')
-      redirect route('cottage.show') with
-        checkout_error: 'Online booking is briefly unavailable — please call us…'
-
- 3. $addons = parseAddons($validated['addons'])
-      "155688-1,155689-3" → [['id'=>'155688','quantity'=>1],
-                             ['id'=>'155689','quantity'=>3]]
-      quantity floored at 1; blank ids dropped
-
- 4. RE-CHECK AVAILABILITY (not trusted from the page the guest was looking at)
-      try: cottagesFreeFor($arrival,$departure)->contains(id === $cottage->id)
-           false → redirect cottage.show?arrival=&departure= with
-                   checkout_error: 'Those dates were taken while you were
-                                    deciding — here is what is still open.'
-      catch → Log::warning('Availability re-check failed before redirect;
-                            continuing')
-           ── deliberate: a failed check must NOT block a booking. Lodgify
-              validates again at checkout, so the worst case is the guest being
-              told there by an authoritative source rather than guessed at here.
-
- 5. $url = LodgifyCheckout::urlFor($cottage, $arrival, $departure,
-                                   $adults, $children, $pets, $addons)
-      → https://checkout.lodgify.com/{checkout_slug}/{cottage->id}/addons
-          ?currency=CAD&arrival=…&departure=…&adults=N[&children=][&pets=]
-          [&addons=155688-1,155689-3]
-      Query string is assembled BY HAND because Lodgify requires a literal comma
-      between add-on pairs; http_build_query() would percent-encode it.
-      ⚠ formatAddons() passes the guest's chosen quantity ONLY. Lodgify applies
-        the add-on's own frequency itself — a PerNight add-on with quantity 3 on
-        a 2-night stay was observed billing 3 × 2. Multiplying locally
-        double-charges.
-
- 6. RECORD THE INTENT (wrapped in try/catch — "analytics are not worth losing a
-    booking over")
-      CheckoutIntent::create([
-        cottage_id, cottage_name, arrival, departure,
-        nights        = Carbon::diffInDays(arrival, departure),
-        adults, children, pets,
-        quoted_total  = $validated['total'] ?? null,   ← what OUR page showed
-        currency      = strtoupper(lodgify.checkout_currency),
-        addons        = $addons,                       ← json column
-        redirect_url  = $url,                          ← exact URL, for debugging
-        status        = 'redirected',
-        referrer      = substr(header('referer'), 0, 512),
-        utm_source, utm_medium, utm_campaign,          ← straight off the query
-        ip_address, user_agent (truncated to 512),
-        session_id    = session()->getId(),
-      ])
-      Model::creating hook assigns reference = 'INT-' . Str::random(6)
-      catch → Log::error('Could not record checkout intent')
-
- 7. return redirect()->away($url);          // 302 off-site
-```
-
-### The gap in this flow
-
-`CheckoutIntent::markConverted()` and `CheckoutIntent::matchFor()` are both implemented
-and **neither is ever called** — no webhook route, no reconciliation job. So:
-
-- every intent stays `status = 'redirected'` forever;
-- `CheckoutIntent::converted()->count()` in `Admin\CheckoutIntentController` is
-  permanently **0**, and the displayed conversion `rate` is permanently `0.0`;
-- every intent eventually ages past `lodgify.checkout_grace_minutes` (90) and is counted
-  as `abandoned`.
-
-Closing this is Stage 7 in [`01-architecture.md` §Part 4](01-architecture.md). Note that
-the direct-payment flow makes this partly moot for bookings taken on this site — those are
-tracked properly in `bookings` — but the table still never records a conversion.
-
----
+The replacement is `GET /booking/details/{slug}` → `POST /booking` → an emailed Stripe link
+→ `POST /webhooks/stripe`. See [`05-payments-and-booking.md`](05-payments-and-booking.md).
 
 # 10. Gallery — `GET /gallery`
 
@@ -1485,33 +1389,11 @@ acceptable."* Note it forgets only the list key, not the per-reservation
 
 ---
 
-# 22. Admin — checkout intents
+# 22. ~~Admin — checkout intents~~ — REMOVED
 
-`GET /admin/checkouts`, `['auth','admin']` → `Admin\CheckoutIntentController@index`
-
-```php
-$intents = CheckoutIntent::query()->status($status)   // 'all' is a no-op
-              ->latest()->paginate(30)->withQueryString();
-
-$grace     = config('lodgify.checkout_grace_minutes', 90);
-$total     = CheckoutIntent::count();
-$converted = CheckoutIntent::converted()->count();       // status = 'converted'
-$stale     = CheckoutIntent::stale($grace)->count();     // 'redirected' AND older than grace
-
-$stats = [
-  'total' => $total, 'converted' => $converted, 'abandoned' => $stale,
-  'in_flight' => max(0, $total - $converted - $stale),
-  'rate'      => $total > 0 ? round($converted / $total * 100, 1) : null,
-];
-```
-
-The grace window matters: a guest may take twenty minutes over Lodgify's three checkout
-steps, so anything younger than 90 minutes is *in flight*, not abandoned. Abandonment is
-computed on read rather than written back, *"so a late webhook can still claim it."*
-
-⚠ As covered in §9, no webhook exists, so `converted` is always 0 and `rate` always 0.0.
-
----
+`/admin/checkouts` and the `checkout_intents` table are gone. They existed to guess at
+what happened after we redirected a guest to Lodgify; bookings taken on this site are
+recorded directly in `bookings` and `booking_payments` instead.
 
 # 23. Debug routes — local/staging only
 

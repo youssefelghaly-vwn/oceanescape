@@ -4,6 +4,7 @@ namespace Tests\Feature\Booking;
 
 use App\Models\Booking;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Route;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
@@ -85,18 +86,34 @@ class BookingEndpointTest extends TestCase
     }
 
     #[Test]
-    public function the_feature_flag_falls_back_to_the_lodgify_redirect(): void
+    public function the_lodgify_hosted_checkout_route_no_longer_exists(): void
     {
         /*
-         * With direct payments off, the old hosted-checkout path is still the live one, so
-         * the endpoint must hand off rather than half-run the new flow.
+         * Lodgify's hosted checkout has been removed from the project entirely: no
+         * /book/{slug} redirect, no feature flag, no fallback. This asserts the route is
+         * genuinely gone rather than merely unused, so it cannot be reintroduced by
+         * accident.
          */
-        config()->set('booking.direct_payments_enabled', false);
+        $this->get('/book/sea-glass-738423?arrival=2026-11-02&departure=2026-11-05')
+            ->assertNotFound();
 
-        $this->post('/booking', $this->valid())
-            ->assertRedirectContains('/book/sea-glass-738423');
+        $this->assertFalse(
+            Route::has('booking.redirect'),
+            'the booking.redirect route should not be registered'
+        );
+    }
 
-        $this->assertSame(0, Booking::count());
+    #[Test]
+    public function no_route_sends_a_guest_to_a_lodgify_domain(): void
+    {
+        // The whole point of the change: a guest never leaves our domain to pay.
+        foreach (Route::getRoutes() as $route) {
+            $this->assertStringNotContainsString(
+                'lodgify.com',
+                $route->uri(),
+                "route {$route->uri()} references a Lodgify domain"
+            );
+        }
     }
 
     #[Test]

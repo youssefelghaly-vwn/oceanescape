@@ -27,12 +27,6 @@ class SendBalancePaymentLinks extends Command
 
     public function handle(PaymentLinkService $links): int
     {
-        if (! config('booking.direct_payments_enabled')) {
-            $this->line('Direct payments are disabled; nothing to do.');
-
-            return self::SUCCESS;
-        }
-
         $lead = (int) ($this->option('lead') ?: config('booking.balance_lead_days', 30));
         $dry = (bool) $this->option('dry-run');
 

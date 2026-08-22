@@ -16,8 +16,9 @@ use Illuminate\Validation\Validator;
  * request can influence is a price a guest can choose. Everything monetary is re-derived
  * server-side from a live Lodgify quote by QuoteReader and DepositPolicy.
  *
- * (Contrast the pre-existing BookingRedirectController, which accepts a `total` — harmless
- * there because it was only recorded for later comparison and Lodgify did the charging.)
+ * (The old hosted-checkout redirect did accept a `total`, which was harmless because it was
+ * only recorded for later comparison and Lodgify did the charging. That is no longer true
+ * of anything here: we take the money, so no request may name an amount.)
  */
 class StoreBookingRequest extends FormRequest
 {

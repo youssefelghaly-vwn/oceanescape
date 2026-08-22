@@ -21,10 +21,11 @@ use UnexpectedValueException;
  *
  * HOSTED CHECKOUT, NOT THE EMBEDDED ELEMENT — deliberately.
  *
- * Card details are entered on checkout.stripe.com and never reach this server, which
- * keeps us in PCI SAQ A rather than SAQ A-EP. That is the same reasoning that kept this
- * project out of PCI scope when Lodgify collected the money (see LodgifyCheckout): we are
- * changing WHO takes the payment, not starting to handle card data.
+ * Card details are entered on checkout.stripe.com and never reach this server, which keeps
+ * us in PCI SAQ A rather than SAQ A-EP. Lodgify's hosted checkout used to give us that for
+ * free by taking the payment itself; now that it has been removed from the project, hosted
+ * Stripe Checkout is what preserves the same property. We changed WHO takes the payment,
+ * not whether we handle card data.
  *
  * THE AMOUNT IS NEVER TAKEN FROM THE CLIENT. Sessions are built from a BookingPayment row
  * whose amount was derived server-side from a Lodgify quote by DepositPolicy. There is no

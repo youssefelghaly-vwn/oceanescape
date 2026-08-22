@@ -23,13 +23,10 @@
         ratesUrl: '{{ route('api.cottage.rates', $cottage->slug) }}',
         quoteUrl: '{{ route('api.cottage.quote', $cottage->slug) }}',
         addonsUrl: '{{ route('api.cottage.addons', $cottage->slug) }}',
-        {{-- Direct payments on: go to our own guest-details step, which re-prices the
-             stay server-side and then creates the reservation + Stripe deposit link.
-             Off: the original hand-off to Lodgify's hosted checkout. One flag, one
-             behaviour change, nothing else in this page differs. --}}
-        bookUrl: '{{ config('booking.direct_payments_enabled')
-                      ? route('booking.details', $cottage->slug)
-                      : route('booking.redirect', $cottage->slug) }}',
+        {{-- Our own guest-details step: re-prices the stay server-side, then creates the
+             reservation and emails a Stripe payment link. Lodgify's hosted checkout has
+             been removed from the project, so there is no other branch here. --}}
+        bookUrl: '{{ route('booking.details', $cottage->slug) }}',
         currency: '{{ $cottage->currency ?? 'CAD' }}',
         maxGuests: {{ $cottage->maxGuests ?: 'null' }},
         petsAllowed: {{ $cottage->petFriendly ? 'true' : 'false' }},

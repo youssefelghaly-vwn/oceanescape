@@ -16,14 +16,13 @@ business in Lockeport, Nova Scotia. The distinguishing architectural fact is tha
 | Availability calendars, min-stay rules | **Lodgify** |
 | Nightly rates, seasons, fees, taxes, VAT | **Lodgify** |
 | Reservations / bookings | **Lodgify** |
-| Payment collection & checkout | **Stripe**, on this site — see [`05-payments-and-booking.md`](05-payments-and-booking.md). Falls back to **Lodgify hosted checkout** when `BOOKING_DIRECT_PAYMENTS=false` |
+| Payment collection & checkout | **Stripe, on this site.** Lodgify's hosted checkout has been removed entirely — see [`05-payments-and-booking.md`](05-payments-and-booking.md) |
 | Guest reviews & ratings | **Google Places API (New)** |
 | Users, admin accounts, sessions | This app (SQLite/MySQL) |
 | Corporate ("business stay") enquiries | This app |
 | Contact-form messages | This app |
 | Guest-submitted photos + moderation | This app |
-| Checkout intents (attribution/abandonment) | This app |
-| Bookings taken on this site + their payments | This app (Lodgify still owns the *reservation*) |
+| Bookings taken on this site + their payments | This app (Lodgify still owns the *reservation* itself) |
 
 So the app is best understood as a **read-heavy presentation and anti-corruption
 layer over a third-party API**, with a small amount of genuinely local

@@ -41,7 +41,7 @@ class Booking extends Model
         'arrival', 'departure', 'nights',
         'adults', 'children', 'infants', 'pets',
         'guest_name', 'guest_email', 'guest_phone', 'guest_country', 'guest_notes',
-        'user_id', 'checkout_intent_id',
+        'user_id',
         'utm_source', 'utm_medium', 'utm_campaign',
         'ip_address', 'user_agent', 'session_id',
     ];
@@ -102,11 +102,6 @@ class Booking extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
-    }
-
-    public function checkoutIntent(): BelongsTo
-    {
-        return $this->belongsTo(CheckoutIntent::class);
     }
 
     public function paymentOfType(PaymentType $type): ?BookingPayment

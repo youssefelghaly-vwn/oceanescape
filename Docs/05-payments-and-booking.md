@@ -18,56 +18,35 @@ hosted checkout.
 
 # Part 1 — What changed
 
-## Before
+## Removed
 
-```
-guest → /book/{slug} → redirect()->away() → checkout.lodgify.com
-                                              ├─ Lodgify collects contact details
-                                              ├─ Lodgify creates the reservation (Open)
-                                              ├─ Lodgify emails the deposit link
-                                              ├─ Lodgify takes the deposit → Booked
-                                              └─ Lodgify emails the balance link
-```
+Lodgify's hosted checkout is **gone from this project**. There is no `/book/{slug}`
+redirect, no `LodgifyCheckout` service, no `checkout_intents` table, and no feature flag.
+A guest never sees a Lodgify URL.
 
-We lost sight of the guest at the redirect. `checkout_intents` exists purely to record
-that we sent someone away — see [`01-architecture.md`](01-architecture.md) and
-`LodgifyCheckout`, which is still in the codebase and still the fallback.
+| Deleted | Was |
+|---|---|
+| `app/Services/Lodgify/LodgifyCheckout.php` | Built the hand-off URL into `checkout.lodgify.com` |
+| `app/Http/Controllers/BookingRedirectController.php` | `GET /book/{slug}` — recorded the intent, then 302'd off-site |
+| `app/Models/CheckoutIntent.php` + `checkout_intents` table | Attribution for guests we had lost to the redirect |
+| `app/Http/Controllers/Admin/CheckoutIntentController.php` + its view | `/admin/checkouts`, whose conversion rate was permanently 0% |
+| `booking.direct_payments_enabled` | The rollback flag. There is nothing to roll back to |
+| `lodgify.checkout_slug` / `checkout_currency` / `checkout_grace_minutes` | Hosted-checkout settings |
 
-## After
+**One deliberate exception.** `lodgify.checkout_base_url` survives, because
+`checkout.lodgify.com` *also* serves read-only `/api/v1/checkout/calendar`,
+`/api/v1/checkout/price` and `/api/v1/checkout/{id}` endpoints, used server-to-server as a
+data fallback when the authenticated v2 API fails. That is availability and pricing, not
+payment, and no guest is ever sent there. `NoLodgifyCheckoutTest` pins both halves: the
+payment path is absent, the read fallback is intentionally kept.
 
-We own the money; **Lodgify still owns the reservation**.
-
-```
-guest → cottage page, picks dates → "Book now"
-      → GET /booking/details/{slug}      re-prices the stay SERVER-SIDE, collects
-                                         name / email / phone / terms
-      → POST /booking                    (nothing charged)
-          ├─ re-quote from Lodgify, live
-          ├─ re-check availability
-          ├─ derive the payment plan from Lodgify's own schedule
-          ├─ write our `bookings` row
-          ├─ POST /v1/reservation/booking       → reservation exists as `Open`
-          └─ queue the deposit link
-
-guest ← email: signed link to /pay/{token}
-guest → /pay/{token} → Stripe Checkout (hosted) → guest pays
-
-Stripe → POST /webhooks/stripe   checkout.session.completed
-          ├─ verify signature
-          ├─ verify the amount matches
-          ├─ mark the payment paid
-          ├─ advance the booking
-          └─ queue PUT /v1/reservation/booking/{id}/book  → `Booked`, dates held
-
-…30 days before arrival…
-scheduler → balance link → guest pays → webhook → recorded (already Booked)
-```
+## The flow
 
 ## The design decisions behind it
 
 | Decision | Choice | Why |
 |---|---|---|
-| Deposit timing | Booking first, then an emailed link | Mirrors how the Lodgify flow behaved, so returning guests see the same thing. |
+| Deposit timing | Booking first, then an emailed link | Nothing is charged when the guest confirms; the payment link follows by email. |
 | What flips `Open → Booked` | The **deposit** | Lodgify's own semantics, and it blocks the calendar as early as possible. |
 | Deposit amount | **Lodgify's `scheduled_payments`, strictly** | Lodgify is the authority on what is owed. Two systems disagreeing about money means the guest believes whichever they saw last. If Lodgify sends no schedule we **refuse** rather than guess. |
 | Card handling | **Hosted** Stripe Checkout | Card data never touches this server: PCI SAQ A, not SAQ A-EP. Same reasoning that kept the project out of PCI scope before. |
@@ -80,14 +59,11 @@ scheduler → balance link → guest pays → webhook → recorded (already Book
 
 ## 2.0 `GET /booking/details/{slug}` — the guest-details step
 
-Where the cottage page's **Book now** button goes when the flag is on. `bookUrl` in
-`pages/cottage.blade.php` is conditional on `booking.direct_payments_enabled`, so the flag
-is the only thing that changes which flow the button enters:
+Where the cottage page's **Book now** button goes. There is no branch — this is the only
+booking path:
 
 ```blade
-bookUrl: '{{ config('booking.direct_payments_enabled')
-              ? route('booking.details', $cottage->slug)
-              : route('booking.redirect', $cottage->slug) }}',
+bookUrl: '{{ route('booking.details', $cottage->slug) }}',
 ```
 
 A real page rather than a modal, for three reasons:
@@ -495,7 +471,6 @@ live API could not be probed from here.
 
 | Key | Env | Default | Notes |
 |---|---|---|---|
-| `direct_payments_enabled` | `BOOKING_DIRECT_PAYMENTS` | `false` | The rollback switch. False = old Lodgify checkout |
 | `deposit.source` | — | `lodgify_schedule` | Strictly Lodgify's schedule |
 | `deposit.allow_percentage_fallback` | `BOOKING_DEPOSIT_ALLOW_FALLBACK` | `false` | Leave off. On = charging an amount Lodgify never sanctioned |
 | `deposit.fallback_percent` | `BOOKING_DEPOSIT_FALLBACK_PERCENT` | `25.0` | Only used if the above is on |
@@ -527,11 +502,13 @@ live API could not be probed from here.
 | `stripe_webhook_events` | Webhook dedup + replayable payloads |
 | `booking_audit_logs` | Append-only trail |
 
+Removed: `checkout_intents` (see the table at the top of this document).
+
 ---
 
 # Part 8 — Testing
 
-**121 tests, 462 assertions, all passing.** `php artisan test`
+**136 tests, 551 assertions, all passing.** `php artisan test`
 
 | Suite | Covers |
 |---|---|
@@ -551,6 +528,8 @@ live API could not be probed from here.
 | `EndToEndFlowTest` | The whole journey through real routes: cottage page → details → reserve → signed link → webhook → confirmed → balance link |
 | `LodgifyWriteResponseShapeTest` | **Regression:** bare-integer / quoted-string / object / wrapped-object create responses, 2xx-with-no-id failing loudly, money-at-risk severity, and no transport-level retry on writes |
 | `ReconcileOrphansTest` | Report-vs-link, confident match, refusing an ambiguous or someone-else's reservation, email disambiguation, and not reviving a `failed` booking |
+| `NoLodgifyCheckoutTest` | The hosted-checkout classes, routes, table, column and settings are all absent — and the read-only `checkout.lodgify.com` fallback is deliberately kept |
+| `PhantomPropertyTest` | Properties the list endpoint advertises but the detail endpoint 404s: dropped not half-rendered, negatively cached, and not retried |
 
 Note `tests/TestCase.php` enables the feature flag, injects fake Stripe credentials, and
 calls `withoutVite()` (views use `@vite`, and the suite asserts on copy rather than asset
@@ -585,15 +564,15 @@ exercise the async path, use a delayed method rather than a card.
 - [ ] End-to-end test in Stripe test mode: book → pay → confirm the reservation flips to `Booked` in the Lodgify dashboard
 - [ ] Deliberately break it: point `LODGIFY_MARK_BOOKED_PATH` at a bad path, pay, and confirm the alert email arrives
 
-## Enabling
+## There is nothing to enable
 
-```dotenv
-BOOKING_DIRECT_PAYMENTS=true
-```
+The flow is live as soon as Stripe credentials are configured — there is no flag. Which
+means the checklist above is not optional: **without a queue worker, a booking is created
+and the guest never receives a payment link.**
 
-Rollback is the same line set to `false`: `/book/{slug}` returns to the Lodgify hosted
-checkout and none of this code runs. In-flight bookings keep working — their links and
-webhooks are unaffected by the flag.
+If you need to stop taking bookings, remove `STRIPE_SECRET`. `StripeGateway` then throws
+`StripeNotConfigured`, and the guest is told to call you rather than being shown a broken
+payment page.
 
 ## Also apply from the security review
 

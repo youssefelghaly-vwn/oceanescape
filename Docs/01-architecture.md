@@ -164,7 +164,13 @@ Tier 3 is only computed when tier 1 or tier 2 came back empty. Each tier rejects
 already surfaced by an earlier tier, and all three are filtered by a `$fitsParty` closure
 (occupancy + pet policy).
 
-### Hosted-checkout handoff instead of a local booking write
+### ~~Hosted-checkout handoff instead of a local booking write~~ — SUPERSEDED
+
+> **This is no longer how the site works.** Lodgify's hosted checkout has been removed
+> entirely: payments are taken here with Stripe and the reservation is mirrored into
+> Lodgify by API. See [`05-payments-and-booking.md`](05-payments-and-booking.md). The
+> original reasoning is kept below because it explains why `checkout_intents` existed and
+> why the PCI posture was chosen — both of which still inform the current design.
 `LodgifyCheckout` builds a URL into `checkout.lodgify.com/{slug}/{propertyId}/addons`
 and the app calls `redirect()->away($url)`. The class docblock states the reasoning:
 rebuilding checkout locally would mean an unverified booking write, PCI scope, and
@@ -605,10 +611,9 @@ client + probe. Safe only because Stage 1 pinned the behaviour.
 Extract `ReservationPolicy` / `GuestPhotoPolicy`; convert the `/api/*` responses to
 API Resources with contract tests.
 
-### Stage 7 — Close the checkout loop (3–5 days)
-`checkout_intents` has `markConverted()` and `matchFor()` implemented but **nothing calls
-either** — conversion is never actually recorded, so `Admin\CheckoutIntentController`'s
-"converted" count is permanently zero and every intent ages into "abandoned". Wire a
-Lodgify booking webhook (or a reconciliation job over `SyncReservations` output) to call
-`CheckoutIntent::matchFor(...)?->markConverted($bookingId)`. Only then does the
-attribution/abandonment reporting the table was built for actually work.
+### ~~Stage 7 — Close the checkout loop~~ — RESOLVED BY REMOVAL
+`checkout_intents` only ever existed because the hosted-checkout redirect lost sight of the
+guest, and its conversion tracking was never wired up. With the redirect deleted, bookings
+taken on this site are recorded directly and authoritatively in `bookings` /
+`booking_payments`, so the table, its model, its admin page and this stage have all been
+removed rather than completed.

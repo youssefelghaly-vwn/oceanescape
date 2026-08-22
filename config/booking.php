@@ -3,18 +3,21 @@
 /**
  * config/booking.php
  *
- * Direct booking + payment flow.
+ * The booking + payment flow. There is only one.
  *
- * WHAT CHANGED, AND WHY IT MATTERS
+ * WE OWN THE MONEY. LODGIFY OWNS THE RESERVATION.
  *
- * Previously the site handed the guest to Lodgify's hosted checkout
- * (checkout.lodgify.com) and Lodgify collected the money. Lodgify created the
- * reservation as `Open`, emailed its own deposit link, flipped the reservation to
- * `Booked` when the deposit landed, and later emailed the balance link. We saw none
- * of it — see App\Services\Lodgify\LodgifyCheckout and the checkout_intents table,
- * which exists purely because we lost sight of the guest at the redirect.
+ * Lodgify's hosted checkout has been removed from this project entirely — no redirect, no
+ * feature flag, no fallback. A guest never sees a Lodgify URL. The old
+ * App\Services\Lodgify\LodgifyCheckout service, the /book/{slug} redirect and the
+ * checkout_intents attribution table are all gone; `bookings` records what they used to
+ * guess at.
  *
- * Now WE own the money and Lodgify owns the reservation:
+ * (`lodgify.checkout_base_url` still exists and is NOT the hosted checkout: it is the
+ * read-only public calendar/price endpoint used as a data fallback when the authenticated
+ * API fails. No guest is ever sent there.)
+ *
+ * The flow:
  *
  *   1. Guest confirms on our site. NOTHING IS CHARGED at this point.
  *   2. We create the reservation in Lodgify via the API. It is `Open`.
@@ -32,16 +35,6 @@
  */
 
 return [
-
-    /*
-    |--------------------------------------------------------------------------
-    | Feature flag
-    |--------------------------------------------------------------------------
-    | False restores the old behaviour: /book/{slug} redirects to Lodgify's hosted
-    | checkout and none of the code in this feature runs. Keep this switchable —
-    | it is the rollback path if the Lodgify write API misbehaves in production.
-    */
-    'direct_payments_enabled' => (bool) env('BOOKING_DIRECT_PAYMENTS', false),
 
     /*
     |--------------------------------------------------------------------------

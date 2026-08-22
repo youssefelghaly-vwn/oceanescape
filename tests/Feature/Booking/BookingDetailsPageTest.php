@@ -160,14 +160,6 @@ class BookingDetailsPageTest extends TestCase
     }
 
     #[Test]
-    public function with_the_flag_off_it_hands_back_to_the_lodgify_checkout(): void
-    {
-        config()->set('booking.direct_payments_enabled', false);
-
-        $this->get($this->url())->assertRedirectContains('/book/sea-glass-738423');
-    }
-
-    #[Test]
     public function it_prefills_from_the_signed_in_user(): void
     {
         $this->bindLodgify($this->quote());

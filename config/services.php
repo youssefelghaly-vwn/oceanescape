@@ -47,11 +47,10 @@ return [
     |--------------------------------------------------------------------------
     | We use HOSTED Stripe Checkout Sessions, not the embedded Payment Element.
     |
-    | That choice is deliberate and worth keeping: card data never touches this
-    | server, which keeps us in PCI SAQ A rather than SAQ A-EP. It is the same
-    | reasoning that kept us out of PCI scope when Lodgify collected the money
-    | (see App\Services\Lodgify\LodgifyCheckout) — we are changing WHO takes the
-    | payment, not accepting card data ourselves.
+    | That choice is deliberate and worth keeping: card data never touches this server,
+    | which keeps us in PCI SAQ A rather than SAQ A-EP. Lodgify's hosted checkout used to
+    | keep us out of PCI scope by taking the payment for us; now that it is gone, hosted
+    | Stripe Checkout is what preserves the same property.
     |
     | `webhook_secret` is the signing secret for the endpoint, NOT the API key.
     | Stripe issues a different one per endpoint; using the wrong value makes every

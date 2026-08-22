@@ -48,27 +48,29 @@ class BookButtonTargetTest extends TestCase
     }
 
     #[Test]
-    public function with_direct_payments_on_it_points_at_our_own_details_step(): void
+    public function it_points_at_our_own_details_step(): void
     {
-        config()->set('booking.direct_payments_enabled', true);
         $this->bindCottage();
 
         $this->get('/cottage/sea-glass-738423')
             ->assertOk()
-            ->assertSee('/booking/details/sea-glass-738423', escape: false)
-            ->assertDontSee("bookUrl: '".url('/book/sea-glass-738423')."'", escape: false);
+            ->assertSee('/booking/details/sea-glass-738423', escape: false);
     }
 
     #[Test]
-    public function with_direct_payments_off_it_still_hands_off_to_lodgify(): void
+    public function the_page_contains_no_lodgify_checkout_link_at_all(): void
     {
-        config()->set('booking.direct_payments_enabled', false);
+        /*
+         * The original bug was the button pointing at the Lodgify hand-off. Now that the
+         * hand-off is deleted, this asserts the stronger property: nothing on the cottage
+         * page can send a guest to Lodgify to pay.
+         */
         $this->bindCottage();
 
-        $this->get('/cottage/sea-glass-738423')
-            ->assertOk()
-            ->assertSee('/book/sea-glass-738423', escape: false)
-            ->assertDontSee('/booking/details/', escape: false);
+        $html = $this->get('/cottage/sea-glass-738423')->assertOk()->getContent();
+
+        $this->assertStringNotContainsString('checkout.lodgify.com', $html);
+        $this->assertStringNotContainsString('/book/sea-glass-738423', $html);
     }
 
     protected function tearDown(): void

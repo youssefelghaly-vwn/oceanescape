@@ -17,8 +17,6 @@ use App\Http\Controllers\ContactController;
 use App\Http\Controllers\GalleryController;
 use App\Http\Controllers\GuestPhotoController;
 use App\Http\Controllers\ReviewController;
-use App\Http\Controllers\Admin\CheckoutIntentController;
-use App\Http\Controllers\BookingRedirectController;
 use App\Http\Controllers\BookingController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\Webhooks\StripeWebhookController;
@@ -169,28 +167,19 @@ Route::middleware(['auth', 'admin'])
 Route::get('/reviews', [ReviewController::class, 'index'])->name('reviews');
 
 
-
-// Records the intent, then hands off to Lodgify's hosted checkout.
-Route::get('/book/{slug}', BookingRedirectController::class)
-    ->middleware('throttle:30,1')
-    ->name('booking.redirect');
-
-Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(function () {
-    Route::get('/checkouts', [CheckoutIntentController::class, 'index'])->name('checkouts.index');
-});
-
-
 /*
 |--------------------------------------------------------------------------
 | Direct booking + Stripe payments
 |--------------------------------------------------------------------------
-| Replaces the hand-off to Lodgify's hosted checkout when
-| config('booking.direct_payments_enabled') is true. /book/{slug} above remains the
-| fallback and is what BookingController redirects to when the flag is off.
+| The ONLY booking path. Lodgify's hosted checkout has been removed entirely — there is no
+| /book/{slug} redirect and no feature flag any more.
 |
-| Flow: POST /booking creates the reservation in Lodgify as `Open` (charging nothing) and
-| emails a Stripe link. The guest pays from that link; the WEBHOOK is what confirms the
-| booking. See Docs/05-payments-and-booking.md.
+| Flow: the cottage page links to /booking/details/{slug}, which prices the stay
+| server-side. POST /booking creates the reservation in Lodgify as `Open`, charging
+| nothing, and emails a Stripe link served from our own domain. The guest pays there; the
+| WEBHOOK is what confirms the booking and flips it to `Booked` in Lodgify.
+|
+| Nothing in this flow sends a guest to a Lodgify URL. See Docs/05-payments-and-booking.md.
 */
 
 /*
@@ -250,7 +239,6 @@ Route::get('/pay/{token}/cancelled', [PaymentController::class, 'cancelled'])
 Route::post('/webhooks/stripe', [StripeWebhookController::class, 'handle'])
     ->middleware('throttle:stripe-webhook')
     ->name('webhooks.stripe');
-
 
 
 // ------------------------------------------------------------ registration
