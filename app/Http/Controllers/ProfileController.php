@@ -98,8 +98,9 @@ class ProfileController extends Controller
             'email' => ['required', 'email:rfc', 'max:180', 'unique:users,email,' . $user->id],
             /*
              * Contact details only, and both optional. They exist so a returning guest does
-             * not retype them when booking — see User::bookingPrefill(). Nothing to do with
-             * payment is stored on an account: no card, no token, no Stripe customer.
+             * not retype them when booking — the details form on /booking/details/{slug}
+             * reads them straight off the account. Nothing to do with payment is stored on an
+             * account: no card, no token, no Stripe customer.
              */
             'phone'   => ['sometimes', 'nullable', 'string', 'min:6', 'max:40'],
             'country' => ['sometimes', 'nullable', 'string', 'size:2', 'alpha'],

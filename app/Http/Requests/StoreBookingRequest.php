@@ -62,17 +62,6 @@ class StoreBookingRequest extends FormRequest
             // Guest must actively accept before we create a reservation in their name.
             'terms_accepted' => ['accepted'],
 
-            /*
-             * "Take me to payment now" instead of "email me the link".
-             *
-             * A REQUEST, NOT A PERMISSION. Whether it is honoured is decided by
-             * User::canBookDirectly() in the controller — a signed-in, verified account
-             * booking its own email address. Anyone can post pay_now=1; on a guest session
-             * it simply falls back to the emailed link, because the flag controls the
-             * DELIVERY of the payment link and nothing about the amount or the booking.
-             */
-            'pay_now' => ['sometimes', 'boolean'],
-
             'utm_source' => ['sometimes', 'nullable', 'string', 'max:120'],
             'utm_medium' => ['sometimes', 'nullable', 'string', 'max:120'],
             'utm_campaign' => ['sometimes', 'nullable', 'string', 'max:120'],

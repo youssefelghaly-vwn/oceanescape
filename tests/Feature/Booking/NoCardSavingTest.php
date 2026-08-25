@@ -4,7 +4,6 @@ namespace Tests\Feature\Booking;
 
 use App\Models\Booking;
 use App\Models\BookingPayment;
-use App\Models\User;
 use App\Services\Payments\StripeGateway;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Schema;
@@ -15,11 +14,10 @@ use Tests\TestCase;
  * "No card saving" is a promise made to the guest in the booking page copy, so it is pinned
  * here rather than left to a comment.
  *
- * The direct-payment flow is what makes this worth testing: a signed-in guest who pays on
- * our site every season is exactly the case where someone would later reach for a stored
- * card "for convenience". Doing that would change what we are — a site that never sees card
- * data, PCI SAQ A — into something with a payment method vault. The test is the thing that
- * makes that a deliberate decision rather than a one-line addition.
+ * A returning guest who pays every season is exactly the case where someone would later
+ * reach for a stored card "for convenience". Doing that would change what we are — a site
+ * that never sees card data, PCI SAQ A — into something with a payment-method vault. The
+ * test is what makes that a deliberate decision rather than a one-line addition.
  */
 class NoCardSavingTest extends TestCase
 {
@@ -98,23 +96,5 @@ class NoCardSavingTest extends TestCase
                 }
             }
         }
-    }
-
-    #[Test]
-    public function signing_in_prefills_details_and_nothing_more(): void
-    {
-        $user = User::factory()->create([
-            'name' => 'Alex Morgan',
-            'email' => 'alex@example.test',
-            'phone' => '+19025551234',
-            'country' => 'CA',
-        ]);
-
-        $this->assertSame([
-            'guest_name' => 'Alex Morgan',
-            'guest_email' => 'alex@example.test',
-            'guest_phone' => '+19025551234',
-            'guest_country' => 'CA',
-        ], $user->bookingPrefill());
     }
 }

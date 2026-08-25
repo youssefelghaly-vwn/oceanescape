@@ -28,8 +28,7 @@ use Illuminate\Support\Facades\Request;
  * events (BookingAuditor mirrors `payment.*` and `stripe.*` events into this channel, so
  * an event raised anywhere in the codebase lands here without a call to this class). This
  * class exists for the attempt-specific detail that has no business in an audit row: which
- * Stripe session was reused, what the decline code was, whether the guest paid inline or
- * from an emailed link.
+ * Stripe session was reused, and what the decline code was.
  *
  * WHAT IS NEVER WRITTEN HERE
  * Card numbers (we never see one — hosted Stripe Checkout), Stripe secrets, webhook
@@ -40,17 +39,6 @@ class PaymentAttemptLog
 {
     /** The channel name, so a caller never has to spell it. */
     public const CHANNEL = 'payments';
-
-    /**
-     * How the guest reached the payment.
-     *
-     * `direct` is the signed-in, pay-immediately flow; `link` is the emailed link. Worth
-     * distinguishing in the log because the two have different abandonment shapes and the
-     * direct flow has no email to fall back on until the delayed job fires.
-     */
-    public const MODE_DIRECT = 'direct';
-
-    public const MODE_LINK = 'link';
 
     /**
      * We have a live Stripe Checkout Session and are handing the guest to it. THIS is the
@@ -115,7 +103,6 @@ class PaymentAttemptLog
     {
         $payload = [
             'attempt' => $attempt,
-            'mode' => $this->mode($payment),
         ] + $this->identity($payment->booking, $payment) + [
             'ip' => $this->ip(),
             'context' => $context ?: null,
@@ -148,15 +135,6 @@ class PaymentAttemptLog
             'stripe_session' => $payment?->stripe_checkout_session_id,
             'stripe_intent' => $payment?->stripe_payment_intent_id,
         ], fn ($v) => $v !== null);
-    }
-
-    /**
-     * An emailed link has a send count; a direct payment does not, because the guest went
-     * straight from the confirm button to Stripe.
-     */
-    protected function mode(BookingPayment $payment): string
-    {
-        return $payment->link_sent_at === null ? self::MODE_DIRECT : self::MODE_LINK;
     }
 
     /** Jobs and scheduled commands run without a request, where Request::ip() invents one. */

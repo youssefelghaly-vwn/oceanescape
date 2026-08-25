@@ -1,12 +1,13 @@
 {{-- resources/views/pages/booking-details.blade.php
 
      The guest-details step. Nothing is charged from this page: submitting it creates the
-     reservation in Lodgify as `Open` and either emails a Stripe payment link or — for a
-     signed-in, verified guest booking their own address ($canPayNow) — takes them straight
-     to Stripe. Which button they pressed is only a request; BookingController re-decides
-     from the session, so a stale page cannot skip the email for a guest who needs it.
+     reservation in Lodgify as `Open` and emails a Stripe payment link.
 
-     No card is stored on either path. Signing in prefills DETAILS, never a payment method.
+     ONE PATH, FOR EVERYONE. A signed-in guest is treated exactly like a stranger from the
+     submit button onwards — same booking, same amount, same emailed link. All being signed
+     in does is arrive with the form already filled in from the account ($user), which is a
+     convenience and never a shortcut: no card is stored, and nothing here is prefilled that
+     the guest cannot see and change.
 
      The prices shown here come from a LIVE server-side Lodgify quote (see
      BookingController::details), not from the calendar widget — so the figure the guest
@@ -21,24 +22,13 @@
 
         <h1 class="mt-4 font-display text-3xl text-ink-900 sm:text-4xl">Almost there</h1>
         <p class="mt-2 text-tide-700">
-            @if ($canPayNow)
-                Your details are filled in below &mdash; check them over and pay when you're ready.
+            @auth
+                We've filled in your details &mdash; check them over before you confirm.
+                You won't be charged on this page.
             @else
                 We just need a few details. You won't be charged on this page.
-            @endif
+            @endauth
         </p>
-
-        @if ($canPayNow)
-            {{-- Says what signing in actually bought them, and — because it is the obvious
-                 next question — what it did not. --}}
-            <div class="mt-6 rounded-2xl border border-brand-200 bg-brand-50 p-5 text-sm text-brand-900">
-                <p class="font-medium">Signed in as {{ $user->email }}</p>
-                <p class="mt-1.5">
-                    You can pay for this stay now instead of waiting for an email. We don't keep
-                    your card &mdash; Stripe takes the payment and nothing is saved for next time.
-                </p>
-            </div>
-        @endif
 
         @if ($errors->has('booking'))
             <div role="alert" class="mt-6 rounded-2xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-900">
@@ -202,37 +192,14 @@
                     @enderror
                 </div>
 
-                @if ($canPayNow)
-                    {{-- Two submits on one form, distinguished by the `pay_now` value. Same
-                         booking either way; only the delivery of the payment differs. The
-                         primary action names the amount, so nobody arrives at Stripe
-                         surprised by the figure. --}}
-                    <div class="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
-                        <button type="submit" name="pay_now" value="1"
-                                class="w-full rounded-full bg-brand-600 px-6 py-3.5 text-sm font-medium text-white transition hover:bg-brand-700 sm:w-auto sm:px-10">
-                            Reserve &amp; pay {{ $plan->firstPaymentAmount()->format() }} now
-                        </button>
+                <button type="submit"
+                        class="mt-6 w-full rounded-full bg-brand-600 px-6 py-3.5 text-sm font-medium text-white transition hover:bg-brand-700 sm:w-auto sm:px-10">
+                    Reserve &amp; send me the payment link
+                </button>
 
-                        <button type="submit" name="pay_now" value="0"
-                                class="w-full rounded-full border border-fog-300 px-6 py-3.5 text-sm font-medium text-ink-900 transition hover:border-brand-300 sm:w-auto sm:px-8">
-                            Email me the link instead
-                        </button>
-                    </div>
-
-                    <p class="mt-3 text-xs text-tide-600">
-                        Paying now takes you to Stripe's secure page. Your card is entered there,
-                        never here, and is not stored afterwards.
-                    </p>
-                @else
-                    <button type="submit"
-                            class="mt-6 w-full rounded-full bg-brand-600 px-6 py-3.5 text-sm font-medium text-white transition hover:bg-brand-700 sm:w-auto sm:px-10">
-                        Reserve &amp; send me the payment link
-                    </button>
-
-                    <p class="mt-3 text-xs text-tide-600">
-                        No card details are needed yet, and nothing is charged on this page.
-                    </p>
-                @endif
+                <p class="mt-3 text-xs text-tide-600">
+                    No card details are needed yet, and nothing is charged on this page.
+                </p>
             </form>
 
             {{-- --------------------------------------------------------- summary --}}

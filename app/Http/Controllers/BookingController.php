@@ -4,10 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Exceptions\BookingException;
 use App\Http\Requests\StoreBookingRequest;
-use App\Jobs\SendPaymentLink;
 use App\Models\Booking;
-use App\Models\BookingPayment;
-use App\Models\User;
 use App\Services\Booking\BookingCreator;
 use App\Services\Booking\DepositPolicy;
 use App\Services\Booking\QuoteReader;
@@ -33,8 +30,12 @@ class BookingController extends Controller
     /**
      * GET /booking/details/{slug}
      *
-     * The guest-details step. This is what the "Book now" button opens when direct
-     * payments are enabled, replacing the immediate 302 to Lodgify's checkout.
+     * The guest-details step, and where the cottage page's "Book now" button goes. The only
+     * booking path there is — Lodgify's hosted checkout has been removed, flag and all.
+     *
+     * For a signed-in guest the form arrives PREFILLED from their account ($user). That is
+     * the only thing being signed in changes: everything from the submit button onwards is
+     * identical to a stranger's booking.
      *
      * WHY A REAL PAGE RATHER THAN A MODAL
      *   - Validation failures have somewhere to land. POST /booking redirects back here
@@ -122,44 +123,31 @@ class BookingController extends Controller
             'pets' => $pets,
             'priceChanged' => $priceChanged,
             'shownTotal' => $shownTotal,
-            'user' => $request->user(),
             /*
-             * Drives the extra "pay now" button and the prefilled fields. Decided here, not
-             * in the view, and re-decided on POST — a stale page cannot talk the controller
-             * into the direct flow.
+             * The prefill source, and the only thing being signed in changes on this page:
+             * the form arrives filled in with the details we already hold. Everything after
+             * that — the amount, the reservation, the emailed payment link — is identical to
+             * a guest booking.
              */
-            'canPayNow' => $this->directPayAllowed($request->user()),
+            'user' => $request->user(),
         ]);
     }
 
     /**
      * POST /booking
      *
-     * Creates the reservation in Lodgify as `Open` and issues the deposit payment.
-     * NOTHING IS CHARGED HERE, on either path — this only decides where the guest goes next:
+     * Creates the reservation in Lodgify as `Open` and queues the deposit link.
+     * NOTHING IS CHARGED HERE — the guest pays from the emailed link.
      *
-     *   emailed link (default)   "check your email", and SendPaymentLink goes out now. The
-     *                            act of opening that link proves the address is theirs.
-     *   pay now (signed in)      straight to /pay/{token}, and on to Stripe. Available only
-     *                            to a verified account booking its OWN email address, where
-     *                            the inbox round trip proves nothing we do not already know.
-     *                            The email still follows, delayed, in case they walk away.
-     *
-     * Same booking, same server-derived amount, same webhook. And no card is stored on
-     * either path — see App\Services\Payments\StripeGateway.
+     * ONE PATH, FOR EVERYONE. A signed-in guest is treated exactly like a stranger here:
+     * same booking, same server-derived amount, same emailed link. Being signed in only
+     * prefills the form on the previous page. Opening the emailed link is what proves the
+     * address on the booking reaches the person paying, and that is worth keeping for every
+     * booking rather than only for the ones we cannot vouch for.
      */
     public function store(StoreBookingRequest $request): RedirectResponse
     {
-        $data = $request->safe()->except('website_url', 'terms_accepted', 'pay_now');
-
-        /*
-         * Decided from the SESSION, never from the form. The posted pay_now is a request;
-         * this is the answer. A guest, an unverified account, or an account booking somebody
-         * else's email address all fall back to the emailed link — which is the ordinary
-         * flow, not an error.
-         */
-        $payNow = $request->boolean('pay_now')
-            && $this->directPayAllowed($request->user(), (string) $request->input('guest_email'));
+        $data = $request->safe()->except('website_url', 'terms_accepted');
 
         try {
             $booking = $this->creator->create($data + [
@@ -167,7 +155,7 @@ class BookingController extends Controller
                 'ip_address' => $request->ip(),
                 'user_agent' => substr((string) $request->userAgent(), 0, 512),
                 'session_id' => $request->hasSession() ? $request->session()->getId() : null,
-            ], emailFirstLink: ! $payNow);
+            ]);
         } catch (BookingException $e) {
             /*
              * Guest-safe copy only. BookingException::guestMessage() returns null when the
@@ -187,14 +175,6 @@ class BookingController extends Controller
             return $this->backToDetails($request, $this->genericFailure());
         }
 
-        if ($payNow) {
-            $this->rememberDetailsOnProfile($request->user(), $data);
-
-            if ($redirect = $this->straightToPayment($booking)) {
-                return $redirect;
-            }
-        }
-
         /*
          * The reference goes in the session rather than the URL so the confirmation page
          * cannot be reached by guessing, and so a shared link does not expose someone
@@ -203,85 +183,6 @@ class BookingController extends Controller
         return redirect()
             ->route('booking.submitted')
             ->with('booking_reference', $booking->reference);
-    }
-
-    /**
-     * Send a verified, signed-in guest straight to their payment.
-     *
-     * The redirect goes to OUR signed /pay/{token} route, not to Stripe: that page is where
-     * the session is created (or re-created if it lapsed) and where the attempt is logged.
-     * Building a Stripe URL here would duplicate all of it and lose the record.
-     *
-     * The emailed link is still queued, DELAYED, as the fallback for a guest who walks away
-     * from Stripe — SendPaymentLink returns early if the payment settled first, so paying
-     * immediately means no email at all.
-     *
-     * Returns null if there is no payable row, in which case the caller falls through to the
-     * ordinary "check your email" page. Nothing has been charged either way.
-     */
-    protected function straightToPayment(Booking $booking): ?RedirectResponse
-    {
-        $payment = $booking->deposit();
-
-        if (! $payment instanceof BookingPayment || ! $payment->isPayable()) {
-            Log::channel('booking')->warning('Direct payment requested but no payable row exists', [
-                'booking' => $booking->reference,
-            ]);
-
-            return null;
-        }
-
-        $delay = (int) config('booking.direct_pay.fallback_email_delay_minutes', 20);
-
-        SendPaymentLink::dispatch($payment->getKey())->delay(now()->addMinutes($delay));
-
-        return redirect()->to($payment->payUrl());
-    }
-
-    /**
-     * May this visitor book and pay in one step?
-     *
-     * The config switch is checked here rather than in the view so that turning the feature
-     * off closes the POST path too, not just the button.
-     */
-    protected function directPayAllowed(?User $user, ?string $forEmail = null): bool
-    {
-        return (bool) config('booking.direct_pay.enabled', true)
-            && $user !== null
-            && $user->canBookDirectly($forEmail);
-    }
-
-    /**
-     * Keep the phone and country a signed-in guest just typed, so the next booking is
-     * genuinely one click.
-     *
-     * Only ever FILLS BLANKS. Overwriting a profile from a booking form would let a stay
-     * booked for someone else quietly rewrite the account holder's own details. Never fatal:
-     * a failure here costs a prefill, not a booking.
-     */
-    protected function rememberDetailsOnProfile(?User $user, array $data): void
-    {
-        if ($user === null) {
-            return;
-        }
-
-        $updates = array_filter([
-            'phone' => blank($user->phone) ? ($data['guest_phone'] ?? null) : null,
-            'country' => blank($user->country) ? ($data['guest_country'] ?? null) : null,
-        ], fn ($v) => filled($v));
-
-        if ($updates === []) {
-            return;
-        }
-
-        try {
-            $user->forceFill($updates)->save();
-        } catch (\Throwable $e) {
-            Log::channel('booking')->info('Could not store booking details on the profile', [
-                'user' => $user->getKey(),
-                'message' => $e->getMessage(),
-            ]);
-        }
     }
 
     /**

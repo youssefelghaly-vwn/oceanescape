@@ -31,7 +31,7 @@ use UnexpectedValueException;
  * whose amount was derived server-side from a Lodgify quote by DepositPolicy. There is no
  * code path where a request parameter influences what is charged.
  *
- * NO CARD IS EVER SAVED — including for a signed-in guest booking directly.
+ * NO CARD IS EVER SAVED.
  *
  * Every session is built by sessionPayload(), and that payload deliberately omits all four
  * of the things that would make a card reusable:
@@ -42,9 +42,9 @@ use UnexpectedValueException;
  *   saved_payment_method_options would offer "save this card" in the UI
  *
  * `customer_email` is a prefill for the Stripe form and does NOT create a Customer object.
- * Signing in on our site therefore buys a guest pre-filled DETAILS, never a stored card:
- * every payment is a fresh card entry on Stripe's own page. NoCardSavingTest asserts the
- * absence of each key, so adding one is a test failure rather than a quiet policy change.
+ * Every payment is therefore a fresh card entry on Stripe's own page, for a returning guest
+ * as much as a first-time one. NoCardSavingTest asserts the absence of each key, so adding
+ * one is a test failure rather than a quiet policy change.
  */
 class StripeGateway
 {

@@ -232,7 +232,8 @@ return [
     | endpoint; the pre-existing LodgifyClient::createBooking() posted there, which was
     | wrong and had never been exercised because nothing called it.
     |
-    | HOW TO VERIFY, before enabling BOOKING_DIRECT_PAYMENTS in production:
+    | HOW TO VERIFY, before this goes live in production (BOOKING_DIRECT_PAYMENTS was the
+    | old rollout flag and no longer exists — there is only one booking path now):
     |     php artisan lodgify:probe-booking-write --property=738423
     | It reports the real response for each candidate payload shape without guessing.
     | Correct `field_map` below from what it tells you.

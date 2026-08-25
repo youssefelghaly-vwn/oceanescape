@@ -162,16 +162,43 @@ class BookingDetailsPageTest extends TestCase
     #[Test]
     public function it_prefills_from_the_signed_in_user(): void
     {
+        /*
+         * The only thing being signed in changes on this page. Phone is the field that made
+         * `users.phone` worth having: it is required, and before it existed a returning guest
+         * had to retype it on every booking.
+         */
         $this->bindLodgify($this->quote());
 
         $user = User::factory()->create([
-            'name' => 'Jordan Reyes', 'email' => 'jordan@example.test',
+            'name' => 'Jordan Reyes',
+            'email' => 'jordan@example.test',
+            'phone' => '+19025557766',
+            'country' => 'CA',
         ]);
 
         $this->actingAs($user)->get($this->url())
             ->assertOk()
             ->assertSee('Jordan Reyes')
-            ->assertSee('jordan@example.test');
+            ->assertSee('jordan@example.test')
+            ->assertSee('+19025557766')
+            // The country select comes back with the account's value chosen.
+            ->assertSee('value="CA" selected', escape: false);
+    }
+
+    #[Test]
+    public function a_signed_in_guest_is_offered_the_same_single_path_as_anyone_else(): void
+    {
+        /*
+         * Prefilling is a convenience, not a shortcut. There is one submit button and one
+         * outcome — the emailed payment link — because opening that link is what proves the
+         * address on the booking reaches the person paying.
+         */
+        $this->bindLodgify($this->quote());
+
+        $this->actingAs(User::factory()->create())->get($this->url())
+            ->assertOk()
+            ->assertSee('Reserve &amp; send me the payment link', escape: false)
+            ->assertDontSee('name="pay_now"', escape: false);
     }
 
     #[Test]
