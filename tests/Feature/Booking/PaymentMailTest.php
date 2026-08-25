@@ -9,6 +9,8 @@ use App\Mail\PaymentLinkMail;
 use App\Models\Booking;
 use App\Models\BookingPayment;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Mail\Mailable;
+use Illuminate\Mail\Mailables\Content;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
@@ -138,6 +140,56 @@ class PaymentMailTest extends TestCase
 
         $balance = new PaymentLinkMail($booking, $this->payment($booking, PaymentType::Balance, 67500));
         $this->assertStringContainsString('balance', $balance->envelope()->subject);
+    }
+
+    #[Test]
+    public function the_old_view_name_still_renders_the_right_email(): void
+    {
+        /*
+         * REGRESSION, from a real production error:
+         *
+         *     local.ERROR: View [mail.payment-link] not found.
+         *
+         * A queue worker keeps the code it booted with until it is restarted, so the deploy
+         * that split this template left in-flight jobs asking for a view that had just been
+         * deleted — and the guest never got their payment link.
+         *
+         * The shim is called with the OLD mailable's payload only (no isFullPayment, no
+         * daysToArrival), which is exactly what such a worker passes.
+         */
+        $booking = $this->booking();
+
+        foreach ([[PaymentType::Deposit, 22500, 'release the dates'], [PaymentType::Balance, 67500, 'confirmed']] as [$type, $cents, $expected]) {
+            $payment = $this->payment($booking, $type, $cents);
+
+            $mailable = new class($booking, $payment) extends Mailable
+            {
+                public function __construct(public Booking $booking, public BookingPayment $payment) {}
+
+                public function content(): Content
+                {
+                    return new Content(
+                        markdown: 'mail.payment-link',
+                        with: [
+                            'booking' => $this->booking,
+                            'payment' => $this->payment,
+                            'payUrl' => $this->payment->payUrl(),
+                            'amount' => $this->payment->amount(),
+                            'expires' => $this->payment->link_expires_at,
+                            'isFinal' => $this->payment->type !== PaymentType::Deposit,
+                        ],
+                    );
+                }
+            };
+
+            $html = $mailable->render();
+
+            $this->assertStringContainsString($expected, $html);
+            $this->assertStringContainsString($payment->amount()->format(), $html);
+            $this->assertStringContainsString('/pay/'.$payment->token, $html);
+
+            $payment->delete();
+        }
     }
 
     #[Test]
