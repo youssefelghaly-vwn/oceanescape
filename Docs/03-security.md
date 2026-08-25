@@ -5,6 +5,17 @@
 - [Part 3 — Recommended hardening, with code](#part-3--recommended-hardening-with-code)
 - [Part 4 — Pre-launch checklist](#part-4--pre-launch-checklist)
 
+> **This review predates the direct booking + Stripe payments feature.** The controls and
+> findings below still apply to everything they describe, and two findings (**F2** security
+> headers, **F9** `TrustProxies`) matter *more* now that payment links and a payment
+> webhook exist. The payments feature carries its own security model — webhook signature
+> verification, amount verification, signed payment links, PCI scope — documented in
+> [`05-payments-and-booking.md` Part 4](05-payments-and-booking.md).
+>
+> One finding is now partially addressed: **F4** (`$guarded = []`) — the four *new* models
+> use explicit `$fillable`, deliberately excluding every money and status column. The four
+> pre-existing models are unchanged.
+
 **Scope of this review:** a source read of the application code at commit time. It is not
 a penetration test, and it does not cover the hosting environment, TLS termination,
 Lodgify's own security posture, or the Stripe integration (which lives entirely inside

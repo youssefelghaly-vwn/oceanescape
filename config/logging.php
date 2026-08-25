@@ -58,6 +58,24 @@ return [
             'ignore_exceptions' => false,
         ],
 
+        /*
+        | Payments and booking writes get their own channel.
+        |
+        | Every state transition in the booking/payment lifecycle is written here as
+        | well as to the booking_audit_logs table. The table is the queryable record;
+        | this channel is what you tail during an incident, and what survives if a
+        | database write is the thing that failed.
+        |
+        | 90 days because a payment dispute can arrive months after the stay.
+        */
+        'booking' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/booking.log'),
+            'level' => env('LOG_LEVEL', 'info'),
+            'days' => env('BOOKING_LOG_DAYS', 90),
+            'replace_placeholders' => true,
+        ],
+
         'single' => [
             'driver' => 'single',
             'path' => storage_path('logs/laravel.log'),

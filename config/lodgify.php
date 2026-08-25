@@ -4,7 +4,14 @@ return [
     'api_key'  => env('LODGIFY_API_KEY'),
     'base_url' => env('LODGIFY_BASE_URL', 'https://api.lodgify.com'),
 
-    // Public checkout endpoints (no API key, but behind Cloudflare).
+    /*
+    | Public READ endpoints on checkout.lodgify.com (no API key, but behind Cloudflare):
+    | /api/v1/checkout/calendar, /api/v1/checkout/price, /api/v1/checkout/{id}.
+    |
+    | NOT the hosted checkout page. That is gone — see config/booking.php. This host is
+    | only ever called server-to-server as a data fallback when the authenticated v2 API
+    | fails; no guest is ever sent to it.
+    */
     'checkout_base_url' => env('LODGIFY_CHECKOUT_URL', 'https://checkout.lodgify.com'),
 
     /*
@@ -189,20 +196,107 @@ return [
     'nearby_window_days'       => (int) env('LODGIFY_NEARBY_WINDOW', 14),
     'limited_threshold'        => (int) env('LODGIFY_LIMITED_THRESHOLD', 2),
 
-    'checkout_slug' => env('LODGIFY_CHECKOUT_SLUG', 'scott-seely'),
-
     /*
-    | Currency for the checkout. Leave as CAD: passing something else makes the
-    | summary show a converted figure beside the rental's real price, which
-    | confuses more than it helps.
+    | REMOVED: checkout_slug, checkout_currency and checkout_grace_minutes.
+    |
+    | Those configured the hand-off to Lodgify's hosted checkout, which no longer exists in
+    | this project — payments are taken on our own site with Stripe. See config/booking.php.
+    | `checkout_base_url` above survives because it is a READ endpoint (public calendar and
+    | price data), not a payment page.
     */
-    'checkout_currency' => env('LODGIFY_CHECKOUT_CURRENCY', 'CAD'),
 
-    /*
-    | How long a redirect stays "in flight" before it counts as abandoned.
-    | Lodgify's checkout is three steps, so allow a generous window.
-    */
-    'checkout_grace_minutes' => (int) env('LODGIFY_CHECKOUT_GRACE', 90),
     'reservations' => (int) env('LODGIFY_CACHE_RESERVATIONS', 300),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Booking WRITE endpoints
+    |--------------------------------------------------------------------------
+    | Everything above this block is read-only. These are the write paths used by the
+    | direct-payment flow (App\Services\Lodgify\LodgifyBookingWriter).
+    |
+    | ⚠ THE REQUEST SHAPES HERE ARE NOT VERIFIED AGAINST A LIVE ACCOUNT.
+    |
+    | What IS established:
+    |   - POST /v1/reservation/booking            "Creates a booking"
+    |   - PUT  /v1/reservation/booking/{id}/book  "Sets a booking as booked" — changes
+    |                                             status to Booked and updates the
+    |                                             availability calendar
+    |   - GET  /v2/reservations/bookings returns `status` values of Open | Booked |
+    |     Declined, plus total_amount / amount_paid / amount_due. That read shape IS
+    |     verified — see the docblock on App\DTO\Reservation.
+    |
+    | What is NOT established: the exact request body field names for the create call,
+    | and whether any public endpoint exists for recording a payment against a booking.
+    |
+    | Note the create path is v1, NOT v2. `/v2/reservations/bookings` is the LIST
+    | endpoint; the pre-existing LodgifyClient::createBooking() posted there, which was
+    | wrong and had never been exercised because nothing called it.
+    |
+    | HOW TO VERIFY, before enabling BOOKING_DIRECT_PAYMENTS in production:
+    |     php artisan lodgify:probe-booking-write --property=738423
+    | It reports the real response for each candidate payload shape without guessing.
+    | Correct `field_map` below from what it tells you.
+    */
+    'write' => [
+        'create_booking_path' => env('LODGIFY_CREATE_BOOKING_PATH', '/v1/reservation/booking'),
+        'mark_booked_path'    => env('LODGIFY_MARK_BOOKED_PATH', '/v1/reservation/booking/{id}/book'),
+
+        /*
+        | No documented public endpoint for recording a payment has been confirmed.
+        | Left configurable and OFF by default: when null, LodgifyBookingWriter skips the
+        | call and records the reason instead of firing a request at a guessed URL.
+        */
+        'record_payment_path' => env('LODGIFY_RECORD_PAYMENT_PATH'),
+
+        'delete_booking_path' => env('LODGIFY_DELETE_BOOKING_PATH', '/v1/reservation/booking/{id}'),
+
+        /*
+        | Request-body field names for the create call. Extracted to config for exactly
+        | the same reason `rates_param_style` above exists: Lodgify's naming is
+        | inconsistent between endpoints and had to be discovered empirically. When the
+        | probe tells you the real names, change them HERE — no code edit required.
+        */
+        'field_map' => [
+            'property_id'   => env('LODGIFY_FIELD_PROPERTY_ID', 'property_id'),
+            'room_type_id'  => env('LODGIFY_FIELD_ROOM_TYPE_ID', 'room_type_id'),
+            'arrival'       => env('LODGIFY_FIELD_ARRIVAL', 'arrival'),
+            'departure'     => env('LODGIFY_FIELD_DEPARTURE', 'departure'),
+            'status'        => env('LODGIFY_FIELD_STATUS', 'status'),
+            'source'        => env('LODGIFY_FIELD_SOURCE', 'source'),
+            'currency'      => env('LODGIFY_FIELD_CURRENCY', 'currency_code'),
+            'total'         => env('LODGIFY_FIELD_TOTAL', 'total_amount'),
+            'notes'         => env('LODGIFY_FIELD_NOTES', 'notes'),
+            'guest'         => env('LODGIFY_FIELD_GUEST', 'guest'),
+            'guest_name'    => env('LODGIFY_FIELD_GUEST_NAME', 'name'),
+            'guest_email'   => env('LODGIFY_FIELD_GUEST_EMAIL', 'email'),
+            'guest_phone'   => env('LODGIFY_FIELD_GUEST_PHONE', 'phone'),
+            'guest_country' => env('LODGIFY_FIELD_GUEST_COUNTRY', 'country_code'),
+            'rooms'         => env('LODGIFY_FIELD_ROOMS', 'rooms'),
+            'people'        => env('LODGIFY_FIELD_PEOPLE', 'people'),
+        ],
+
+        /*
+        | Status string Lodgify expects for an unconfirmed reservation. Confirmed to be
+        | one of the values the READ endpoint returns, so it is a safe starting point.
+        */
+        'status_open'   => env('LODGIFY_STATUS_OPEN', 'Open'),
+        'status_booked' => env('LODGIFY_STATUS_BOOKED', 'Booked'),
+
+        /*
+        | `source` on the created reservation, so bookings taken on our own site are
+        | distinguishable from Airbnb/Booking.com/phone in the Lodgify dashboard and in
+        | the admin reservations list.
+        */
+        'source' => env('LODGIFY_BOOKING_SOURCE', 'Website'),
+
+        /*
+        | Writes get a longer timeout and NO automatic retries.
+        |
+        | Retrying a non-idempotent POST is how you create two reservations for the same
+        | nights. Retry is handled at the JOB level instead, guarded on
+        | bookings.lodgify_booking_id being null, so a retry can never double-create.
+        */
+        'timeout' => (int) env('LODGIFY_WRITE_TIMEOUT', 30),
+    ],
 
 ];

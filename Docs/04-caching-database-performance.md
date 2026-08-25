@@ -34,6 +34,41 @@ in the cache would not merely be fragile, they would be unreadable.
 The codebase has **three separate cache-access implementations**, which is worth knowing
 before you try to invalidate anything.
 
+### (0) The negative-caching trap, and why it mattered
+
+`Cache::remember()` treats a cached `null` as a **miss**:
+
+```php
+// Illuminate\Cache\Repository::rememberWithWarmth()
+if (! is_null($value)) {
+    return [$value, true];
+}
+$value = $callback();
+```
+
+And `safe()` returns `null` on every failure. So **any failing upstream call was never
+cached and was re-attempted on every single request** — not once per TTL.
+
+In production this surfaced as the same 404 several times a second: Lodgify's
+`/v2/properties` lists ids that `/v2/properties/{id}` rejects with
+`"The property with identifier N does not exists"` (code 997), and each one was re-fetched
+on every page load, forever. Compounded by `->retry(2)` having no predicate, so each
+definitive 404 cost **two** requests.
+
+Fixed in three places:
+
+| Fix | Where |
+|---|---|
+| Cache a non-null sentinel for a definitive 404 (`LodgifyRepository::MISSING`) | `cottageRaw()` |
+| Retry only connection errors, 429 and 5xx — never a 404 or 401 | `LodgifyClient::shouldRetry()` |
+| Log 404/410 at warning (and the isolation line at info) rather than error | `assertOk()`, `safe()` |
+
+The general lesson applies to every `rememberArray()` call in the table below: **a callback
+that can return null has no negative caching.** Where the null is a definitive answer worth
+remembering, return a sentinel; where it is a transient failure, leaving it uncached is
+correct so recovery is picked up immediately. `safe()` now records `lastStatus` so callers
+can tell the two apart.
+
 ### (a) `LodgifyRepository::rememberArray()` — versioned, optionally tagged
 
 ```php
@@ -132,7 +167,7 @@ plus the global `cache.prefix` (`Str::slug(APP_NAME).'-cache-'`).
 | Logical key | TTL config | Default | Written by | Cardinality |
 |---|---|---|---|---|
 | `properties:all:raw` | `cache.properties_list` | 3600 s | `allCottages()` | **1** |
-| `property:{id}:raw` | `cache.property_detail` | 3600 s | `cottageRaw()` | 6 (one per cottage) |
+| `property:{id}:raw` | `cache.property_detail` | 3600 s | `cottageRaw()` | 6 (one per cottage). Also stores the `_lodgify_missing` sentinel for a 404, so phantom ids are asked about once per TTL rather than once per request |
 | `room:{id}:{roomId}:raw` | `cache.property_detail` | 3600 s | `cottageRaw()` | 6 |
 | `avail:{id}:{start}:{end}` | `cache.availability` | 300 s | `cottageAvailability()` | 6 × distinct date ranges ⚠ |
 | `avail:aggregate:{start}:raw` | `cache.availability` | 300 s | `aggregateAvailability()` | 1 per requested start date ⚠ |
