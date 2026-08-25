@@ -30,6 +30,21 @@ use UnexpectedValueException;
  * THE AMOUNT IS NEVER TAKEN FROM THE CLIENT. Sessions are built from a BookingPayment row
  * whose amount was derived server-side from a Lodgify quote by DepositPolicy. There is no
  * code path where a request parameter influences what is charged.
+ *
+ * NO CARD IS EVER SAVED — including for a signed-in guest booking directly.
+ *
+ * Every session is built by sessionPayload(), and that payload deliberately omits all four
+ * of the things that would make a card reusable:
+ *
+ *   setup_future_usage           would tell Stripe to keep the payment method on file
+ *   customer                     would attach the card to a stored Customer
+ *   customer_creation            would create one for a guest checkout
+ *   saved_payment_method_options would offer "save this card" in the UI
+ *
+ * `customer_email` is a prefill for the Stripe form and does NOT create a Customer object.
+ * Signing in on our site therefore buys a guest pre-filled DETAILS, never a stored card:
+ * every payment is a fresh card entry on Stripe's own page. NoCardSavingTest asserts the
+ * absence of each key, so adding one is a test failure rather than a quiet policy change.
  */
 class StripeGateway
 {
@@ -108,12 +123,45 @@ class StripeGateway
             }
         }
 
+        $session = $this->client()->checkout->sessions->create(
+            $this->sessionPayload($payment),
+            ['idempotency_key' => $payment->idempotency_key],
+        );
+
+        Log::stack(['booking', 'payments'])->info('stripe.session.created', [
+            'booking' => $payment->booking->reference,
+            'payment' => $payment->reference,
+            'session_id' => $session->id,
+            'amount' => $payment->amount()->format(),
+        ]);
+
+        return $session;
+    }
+
+    /**
+     * Everything we send Stripe to open a Checkout Session.
+     *
+     * PUBLIC, and separate from createCheckoutSession(), so that what we ask Stripe for can
+     * be asserted on without a network call — specifically the four keys that are NOT here
+     * (see the class docblock: no card is ever saved). A guarantee nothing can test is a
+     * guarantee that lasts until the next edit.
+     *
+     * @return array<string, mixed>
+     */
+    public function sessionPayload(BookingPayment $payment): array
+    {
         $booking = $payment->booking;
         $amount = $payment->amount();
 
-        $session = $this->client()->checkout->sessions->create([
+        return [
             'mode' => 'payment',
             'client_reference_id' => $payment->reference,
+
+            /*
+             * A PREFILL ONLY. Passing customer_email does not create a Stripe Customer and
+             * does not store a payment method; it saves the guest typing an address they
+             * have already given us. Nothing here makes a card reusable.
+             */
             'customer_email' => $booking->guest_email,
 
             /*
@@ -160,18 +208,7 @@ class StripeGateway
             'success_url' => route('booking.pay.success', ['token' => $payment->token])
                              .'?session_id={CHECKOUT_SESSION_ID}',
             'cancel_url' => route('booking.pay.cancelled', ['token' => $payment->token]),
-        ], [
-            'idempotency_key' => $payment->idempotency_key,
-        ]);
-
-        Log::channel('booking')->info('stripe.session.created', [
-            'booking' => $booking->reference,
-            'payment' => $payment->reference,
-            'session_id' => $session->id,
-            'amount' => $amount->format(),
-        ]);
-
-        return $session;
+        ];
     }
 
     public function retrieveSession(string $sessionId): ?CheckoutSession

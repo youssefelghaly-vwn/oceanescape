@@ -16,6 +16,8 @@ class User extends Authenticatable implements MustVerifyEmail
     protected $fillable = [
         'name',
         'email',
+        'phone',
+        'country',
         'password',
         'is_admin',
     ];
@@ -51,6 +53,50 @@ class User extends Authenticatable implements MustVerifyEmail
     public function sendPasswordResetNotification(#[\SensitiveParameter] $token): void
     {
         $this->notify(new ResetPasswordNotification($token));
+    }
+
+    /**
+     * Details we can safely prefill into a booking form for this signed-in guest.
+     *
+     * NOT payment details — a card is never stored (see StripeGateway). This is the contact
+     * information they have already given us, so a returning guest does not retype it.
+     *
+     * @return array<string, string|null>
+     */
+    public function bookingPrefill(): array
+    {
+        return [
+            'guest_name' => $this->name,
+            'guest_email' => $this->email,
+            'guest_phone' => $this->phone,
+            'guest_country' => $this->country,
+        ];
+    }
+
+    /**
+     * May this account book and pay in one step, without the emailed link?
+     *
+     * Two conditions, both about identity rather than convenience:
+     *
+     *   VERIFIED EMAIL     the same bar `/my-stays` sets. The booking is attached to this
+     *                      account, and an unverified address is not yet proof the account
+     *                      belongs to the person using it.
+     *   ADDRESS MATCHES    the booking must be for this account's own email. Otherwise
+     *                      "book direct" becomes a way to create a booking against someone
+     *                      else's address while skipping the emailed link that would
+     *                      normally have to be opened from that inbox.
+     *
+     * A guest who fails either can still book — they get the emailed payment link, which is
+     * the ordinary flow and proves the address on the way through.
+     */
+    public function canBookDirectly(?string $forEmail = null): bool
+    {
+        if (! $this->hasVerifiedEmail()) {
+            return false;
+        }
+
+        return $forEmail === null
+            || strtolower(trim($forEmail)) === strtolower((string) $this->email);
     }
 
     public function businessStayRequests()

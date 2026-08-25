@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Enums\PaymentStatus;
 use App\Models\BookingPayment;
 use App\Services\Booking\BookingAuditor;
+use App\Services\Payments\PaymentAttemptLog;
 use App\Services\Payments\PaymentLinkService;
 use App\Services\Payments\PaymentSettler;
 use App\Services\Payments\StripeGateway;
@@ -37,6 +38,7 @@ class PaymentController extends Controller
         protected PaymentLinkService $links,
         protected PaymentSettler $settler,
         protected BookingAuditor $auditor,
+        protected PaymentAttemptLog $attempts,
     ) {}
 
     /**
@@ -76,6 +78,10 @@ class PaymentController extends Controller
                 $payment = $this->links->refresh($payment);
             }
 
+            // Captured BEFORE the call: the row is updated below, so comparing afterwards
+            // would always look like a reuse.
+            $previousSession = $payment->stripe_checkout_session_id;
+
             $session = $this->stripe->createCheckoutSession($payment);
 
             $payment->forceFill([
@@ -84,10 +90,26 @@ class PaymentController extends Controller
                     ? PaymentStatus::LinkSent
                     : $payment->status,
             ])->save();
+
+            /*
+             * The attempt begins HERE, not when the link was opened: this is the last thing
+             * we know before the guest is on Stripe's page. Recorded with whether the
+             * session was reused, so a later decline can be tied to the right attempt.
+             */
+            $this->attempts->reachedStripe(
+                $payment->fresh(),
+                $session->id,
+                reused: $session->id === $previousSession,
+            );
         } catch (\Throwable $e) {
             Log::channel('booking')->error('Could not start Stripe checkout', [
                 'payment' => $payment->reference,
                 'message' => $e->getMessage(),
+            ]);
+
+            $this->attempts->unavailable($payment, 'could not open a Stripe session', [
+                'message' => $e->getMessage(),
+                'exception' => $e::class,
             ]);
 
             return view('pages.payment-unavailable', [

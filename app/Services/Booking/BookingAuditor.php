@@ -5,6 +5,8 @@ namespace App\Services\Booking;
 use App\Models\Booking;
 use App\Models\BookingAuditLog;
 use App\Models\BookingPayment;
+use App\Services\Payments\PaymentAttemptLog;
+use App\Support\ScrubbedContext;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Request;
@@ -17,6 +19,12 @@ use Illuminate\Support\Facades\Request;
  *   - the `booking` log channel, which is what you tail during an incident and which
  *     survives the database being the thing that broke
  *
+ * AND, for anything to do with money, to a third: `payment.*` and `stripe.*` events are
+ * MIRRORED into the `payments` channel (storage/logs/payments-*.log). That mirroring lives
+ * here rather than at each call site so that a payment event raised anywhere in the
+ * codebase — settler, sweeper, webhook, a service written next year — lands in the payment
+ * attempt log without its author having to remember to put it there.
+ *
  * WHAT MUST NEVER REACH THE CONTEXT COLUMN
  * Card data (we never see any), Stripe secrets, webhook signing secrets, full webhook
  * payloads, or raw API keys. `scrub()` enforces this by allowlisting scalar values and
@@ -26,13 +34,7 @@ use Illuminate\Support\Facades\Request;
  */
 class BookingAuditor
 {
-    /**
-     * Keys that are redacted wherever they appear, at any depth.
-     */
-    protected const REDACT = [
-        'secret', 'password', 'token', 'api_key', 'apikey', 'authorization',
-        'card', 'cvc', 'cvv', 'number', 'signature', 'client_secret',
-    ];
+    public function __construct(protected PaymentAttemptLog $attempts) {}
 
     /** @param array<string, mixed> $context */
     public function record(
@@ -80,6 +82,10 @@ class BookingAuditor
             'actor' => $actorType,
             'context' => $clean ?: null,
         ], fn ($v) => $v !== null));
+
+        if ($this->isPaymentEvent($event)) {
+            $this->attempts->event($event, $booking, $payment, $clean);
+        }
     }
 
     /** Convenience for a booking status change, so from/to are never forgotten. */
@@ -121,54 +127,43 @@ class BookingAuditor
             'payment' => $payment?->reference,
             'context' => $clean,
         ]);
+
+        /*
+         * Also at error level in the payment log. A failure that record() already mirrored
+         * at info would otherwise be invisible to anything alerting on level — and
+         * payment.amount_mismatch is precisely the line that must not be missed.
+         */
+        if ($this->isPaymentEvent($event)) {
+            $this->attempts->event($event, $booking, $payment, $clean, level: 'error');
+        }
     }
 
     /**
-     * Recursively redact sensitive keys and flatten anything that is not a scalar.
+     * Redaction lives in App\Support\ScrubbedContext, shared with the payment attempt
+     * log — one list of sensitive keys for everything we write about a payment, so the two
+     * cannot drift into redacting different things.
      *
      * @param  array<mixed>  $context
      * @return array<mixed>
      */
-    protected function scrub(array $context, int $depth = 0): array
+    protected function scrub(array $context): array
     {
-        if ($depth > 4) {
-            return ['_truncated' => 'nesting too deep for an audit record'];
-        }
-
-        $out = [];
-
-        foreach ($context as $key => $value) {
-            if ($this->isSensitive((string) $key)) {
-                $out[$key] = '[redacted]';
-
-                continue;
-            }
-
-            $out[$key] = match (true) {
-                is_array($value) => $this->scrub($value, $depth + 1),
-                is_scalar($value), is_null($value) => $value,
-                $value instanceof \DateTimeInterface => $value->format(DATE_ATOM),
-                $value instanceof \Stringable => (string) $value,
-                // Objects are summarised rather than serialised: an audit row should
-                // never become a dumping ground for a whole API response.
-                default => '['.get_debug_type($value).']',
-            };
-        }
-
-        return $out;
+        return ScrubbedContext::make($context);
     }
 
-    protected function isSensitive(string $key): bool
+    /**
+     * Is this a money event?
+     *
+     * Prefix match, not a list of known event names: a new `payment.*` event added next
+     * year has to appear in the payment log without anyone remembering to register it
+     * here. `lodgify.record_payment.*` is included because reporting a payment back to
+     * Lodgify is part of the payment's story even though it is a Lodgify call.
+     */
+    protected function isPaymentEvent(string $event): bool
     {
-        $needle = strtolower($key);
-
-        foreach (self::REDACT as $bad) {
-            if (str_contains($needle, $bad)) {
-                return true;
-            }
-        }
-
-        return false;
+        return str_starts_with($event, 'payment.')
+            || str_starts_with($event, 'stripe.')
+            || str_starts_with($event, 'lodgify.record_payment');
     }
 
     /**

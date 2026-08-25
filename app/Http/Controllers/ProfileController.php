@@ -96,13 +96,22 @@ class ProfileController extends Controller
         $validated = $request->validate([
             'name'  => ['required', 'string', 'max:120'],
             'email' => ['required', 'email:rfc', 'max:180', 'unique:users,email,' . $user->id],
+            /*
+             * Contact details only, and both optional. They exist so a returning guest does
+             * not retype them when booking — see User::bookingPrefill(). Nothing to do with
+             * payment is stored on an account: no card, no token, no Stripe customer.
+             */
+            'phone'   => ['sometimes', 'nullable', 'string', 'min:6', 'max:40'],
+            'country' => ['sometimes', 'nullable', 'string', 'size:2', 'alpha'],
         ]);
 
         $emailChanged = strtolower($validated['email']) !== strtolower($user->email);
 
         $user->fill([
-            'name'  => $validated['name'],
-            'email' => strtolower($validated['email']),
+            'name'    => $validated['name'],
+            'email'   => strtolower($validated['email']),
+            'phone'   => $validated['phone'] ?? null,
+            'country' => isset($validated['country']) ? strtoupper($validated['country']) : null,
         ]);
 
         if ($emailChanged) {

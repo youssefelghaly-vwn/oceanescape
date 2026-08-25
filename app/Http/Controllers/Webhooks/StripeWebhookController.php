@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Webhooks;
 use App\Enums\PaymentStatus;
 use App\Models\BookingPayment;
 use App\Models\StripeWebhookEvent;
+use App\Services\Payments\PaymentAttemptLog;
 use App\Services\Payments\PaymentSettler;
 use App\Services\Payments\StripeGateway;
 use App\Support\Money;
@@ -44,6 +45,7 @@ class StripeWebhookController extends Controller
     public function __construct(
         protected StripeGateway $stripe,
         protected PaymentSettler $settler,
+        protected PaymentAttemptLog $attempts,
     ) {}
 
     public function handle(Request $request): Response
@@ -88,6 +90,7 @@ class StripeWebhookController extends Controller
                 'checkout.session.async_payment_succeeded' => $this->onAsyncSucceeded($event, $record),
                 'checkout.session.async_payment_failed' => $this->onAsyncFailed($event, $record),
                 'checkout.session.expired' => $this->onSessionExpired($event, $record),
+                'payment_intent.payment_failed' => $this->onIntentFailed($event, $record),
                 'charge.refunded' => $this->onChargeRefunded($event, $record),
                 default => null,
             };
@@ -218,6 +221,50 @@ class StripeWebhookController extends Controller
     }
 
     /**
+     * A card was declined, or the payment otherwise failed inside the session.
+     *
+     * DELIBERATELY CHANGES NO STATE. A decline is not the end of the attempt: Stripe
+     * Checkout lets the guest try again in the same session, and the booking is still
+     * awaiting its deposit either way. Marking the payment failed here would take a payable
+     * link away from a guest whose second card would have worked.
+     *
+     * It is handled at all because a decline is the single most useful line in the payment
+     * attempt log — "I tried three times and it wouldn't work" is otherwise unanswerable
+     * from our side, since every one of those attempts lives only in Stripe.
+     */
+    protected function onIntentFailed(Event $event, StripeWebhookEvent $record): ?int
+    {
+        $intent = $event->data->object;
+
+        /*
+         * `filled()` is load-bearing: Laravel turns where(col, null) into WHERE col IS NULL,
+         * which would match the first payment that has no intent id yet — attaching a
+         * stranger's decline to somebody else's booking.
+         */
+        $payment = filled($intent->id ?? null)
+            ? BookingPayment::query()->with('booking')->where('stripe_payment_intent_id', $intent->id)->first()
+            : null;
+
+        $payment ??= $this->paymentFromMetadata($intent);
+
+        if (! $payment) {
+            return null;
+        }
+
+        $error = $intent->last_payment_error ?? null;
+
+        $this->attempts->declined(
+            $payment,
+            // decline_code is the issuer's reason where there is one; code is Stripe's.
+            $error->decline_code ?? $error->code ?? null,
+            $error->message ?? null,
+            ['intent' => $intent->id ?? null],
+        );
+
+        return $payment->getKey();
+    }
+
+    /**
      * A refund was issued (from the Stripe dashboard, most likely).
      *
      * Recorded, but deliberately does NOT cancel the reservation. A partial refund, a
@@ -266,10 +313,16 @@ class StripeWebhookController extends Controller
      */
     protected function resolvePayment(mixed $session): ?BookingPayment
     {
-        $payment = BookingPayment::query()
-            ->with('booking')
-            ->where('stripe_checkout_session_id', $session->id ?? null)
-            ->first();
+        /*
+         * Guarded for the same reason as onIntentFailed(): where(col, null) becomes
+         * WHERE col IS NULL in Laravel, so an event carrying no session id would resolve to
+         * whichever payment happens to have no session yet — and this resolver feeds
+         * SETTLEMENT, where attaching money to the wrong booking is the worst outcome in the
+         * feature.
+         */
+        $payment = filled($session->id ?? null)
+            ? BookingPayment::query()->with('booking')->where('stripe_checkout_session_id', $session->id)->first()
+            : null;
 
         if ($payment) {
             return $payment;
@@ -301,6 +354,25 @@ class StripeWebhookController extends Controller
         ]);
 
         return null;
+    }
+
+    /**
+     * Resolve a payment from a PaymentIntent's own metadata.
+     *
+     * We set `payment_intent_data.metadata.payment_reference` when the session is created
+     * (StripeGateway::sessionPayload), so an intent-level event can find its way back even
+     * before the intent id has been recorded against our row — which is the normal case for
+     * a decline, since nothing has succeeded yet.
+     */
+    protected function paymentFromMetadata(mixed $intent): ?BookingPayment
+    {
+        $reference = $intent->metadata->payment_reference ?? null;
+
+        if (blank($reference)) {
+            return null;
+        }
+
+        return BookingPayment::query()->with('booking')->where('reference', $reference)->first();
     }
 
     protected function capturedFrom(mixed $session): ?Money

@@ -53,7 +53,8 @@ routes/web.php                      every URL in the app (single file, 224 lines
 bootstrap/app.php                   kernel config: routing, middleware alias, exceptions
 app/Http/Controllers/               thin controllers; almost no business logic
 app/Services/Booking/               booking orchestration, deposit policy, audit
-app/Services/Payments/              Stripe gateway, payment links, settlement
+app/Services/Payments/              Stripe gateway, payment links, settlement,
+                                    payment attempt log (storage/logs/payments-*.log)
 app/Services/Lodgify/               the whole Lodgify integration (~4,100 lines)
   LodgifyClient.php                 raw HTTP transport + endpoint knowledge
   LodgifyRepository.php             caching, mapping, availability/rate/quote logic

@@ -1,7 +1,12 @@
 {{-- resources/views/pages/booking-details.blade.php
 
      The guest-details step. Nothing is charged from this page: submitting it creates the
-     reservation in Lodgify as `Open` and emails a Stripe payment link.
+     reservation in Lodgify as `Open` and either emails a Stripe payment link or — for a
+     signed-in, verified guest booking their own address ($canPayNow) — takes them straight
+     to Stripe. Which button they pressed is only a request; BookingController re-decides
+     from the session, so a stale page cannot skip the email for a guest who needs it.
+
+     No card is stored on either path. Signing in prefills DETAILS, never a payment method.
 
      The prices shown here come from a LIVE server-side Lodgify quote (see
      BookingController::details), not from the calendar widget — so the figure the guest
@@ -16,8 +21,24 @@
 
         <h1 class="mt-4 font-display text-3xl text-ink-900 sm:text-4xl">Almost there</h1>
         <p class="mt-2 text-tide-700">
-            We just need a few details. You won't be charged on this page.
+            @if ($canPayNow)
+                Your details are filled in below &mdash; check them over and pay when you're ready.
+            @else
+                We just need a few details. You won't be charged on this page.
+            @endif
         </p>
+
+        @if ($canPayNow)
+            {{-- Says what signing in actually bought them, and — because it is the obvious
+                 next question — what it did not. --}}
+            <div class="mt-6 rounded-2xl border border-brand-200 bg-brand-50 p-5 text-sm text-brand-900">
+                <p class="font-medium">Signed in as {{ $user->email }}</p>
+                <p class="mt-1.5">
+                    You can pay for this stay now instead of waiting for an email. We don't keep
+                    your card &mdash; Stripe takes the payment and nothing is saved for next time.
+                </p>
+            </div>
+        @endif
 
         @if ($errors->has('booking'))
             <div role="alert" class="mt-6 rounded-2xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-900">
@@ -109,13 +130,46 @@
                             </label>
                             <input type="tel" name="guest_phone" id="guest_phone" required
                                    autocomplete="tel" maxlength="40"
-                                   value="{{ old('guest_phone') }}"
+                                   value="{{ old('guest_phone', $user?->phone) }}"
                                    @class([
                                        'mt-1.5 w-full rounded-xl border px-3.5 py-2.5 text-sm',
                                        'border-rose-300 bg-rose-50' => $errors->has('guest_phone'),
                                        'border-fog-300' => ! $errors->has('guest_phone'),
                                    ])>
                             @error('guest_phone')
+                                <p class="mt-1.5 text-sm text-rose-700">{{ $message }}</p>
+                            @enderror
+                        </div>
+
+                        <div class="sm:col-span-2">
+                            <label for="guest_country" class="block text-sm font-medium text-ink-900">
+                                Country <span class="text-tide-500">(optional)</span>
+                            </label>
+                            {{-- A select, not a text box: Lodgify wants an ISO 3166-1
+                                 alpha-2 code on the reservation, and a typed code is a
+                                 validation error waiting to happen. --}}
+                            <select name="guest_country" id="guest_country"
+                                    class="mt-1.5 w-full rounded-xl border border-fog-300 px-3.5 py-2.5 text-sm">
+                                @php
+                                    $countries = [
+                                        'CA' => 'Canada',
+                                        'US' => 'United States',
+                                        'GB' => 'United Kingdom',
+                                        'IE' => 'Ireland',
+                                        'FR' => 'France',
+                                        'DE' => 'Germany',
+                                        'NL' => 'Netherlands',
+                                        'AU' => 'Australia',
+                                        'NZ' => 'New Zealand',
+                                    ];
+                                    $selectedCountry = old('guest_country', $user?->country);
+                                @endphp
+                                <option value="">Prefer not to say</option>
+                                @foreach ($countries as $code => $name)
+                                    <option value="{{ $code }}" @selected($selectedCountry === $code)>{{ $name }}</option>
+                                @endforeach
+                            </select>
+                            @error('guest_country')
                                 <p class="mt-1.5 text-sm text-rose-700">{{ $message }}</p>
                             @enderror
                         </div>
@@ -148,14 +202,37 @@
                     @enderror
                 </div>
 
-                <button type="submit"
-                        class="mt-6 w-full rounded-full bg-brand-600 px-6 py-3.5 text-sm font-medium text-white transition hover:bg-brand-700 sm:w-auto sm:px-10">
-                    Reserve &amp; send me the payment link
-                </button>
+                @if ($canPayNow)
+                    {{-- Two submits on one form, distinguished by the `pay_now` value. Same
+                         booking either way; only the delivery of the payment differs. The
+                         primary action names the amount, so nobody arrives at Stripe
+                         surprised by the figure. --}}
+                    <div class="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
+                        <button type="submit" name="pay_now" value="1"
+                                class="w-full rounded-full bg-brand-600 px-6 py-3.5 text-sm font-medium text-white transition hover:bg-brand-700 sm:w-auto sm:px-10">
+                            Reserve &amp; pay {{ $plan->firstPaymentAmount()->format() }} now
+                        </button>
 
-                <p class="mt-3 text-xs text-tide-600">
-                    No card details are needed yet, and nothing is charged on this page.
-                </p>
+                        <button type="submit" name="pay_now" value="0"
+                                class="w-full rounded-full border border-fog-300 px-6 py-3.5 text-sm font-medium text-ink-900 transition hover:border-brand-300 sm:w-auto sm:px-8">
+                            Email me the link instead
+                        </button>
+                    </div>
+
+                    <p class="mt-3 text-xs text-tide-600">
+                        Paying now takes you to Stripe's secure page. Your card is entered there,
+                        never here, and is not stored afterwards.
+                    </p>
+                @else
+                    <button type="submit"
+                            class="mt-6 w-full rounded-full bg-brand-600 px-6 py-3.5 text-sm font-medium text-white transition hover:bg-brand-700 sm:w-auto sm:px-10">
+                        Reserve &amp; send me the payment link
+                    </button>
+
+                    <p class="mt-3 text-xs text-tide-600">
+                        No card details are needed yet, and nothing is charged on this page.
+                    </p>
+                @endif
             </form>
 
             {{-- --------------------------------------------------------- summary --}}
@@ -229,7 +306,8 @@
                     @endif
 
                     <p class="mt-4 text-xs text-tide-600">
-                        Payments are handled securely by Stripe. We never see your card details.
+                        Payments are handled securely by Stripe. We never see your card details,
+                        and no card is stored for later.
                     </p>
                 </div>
             </aside>

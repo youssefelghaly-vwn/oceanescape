@@ -75,6 +75,42 @@
                     </p>
                 </div>
 
+                {{-- Optional, and prefilled into the booking form so a returning guest does
+                     not retype them. Contact details only — no card is ever stored on an
+                     account, on any path. --}}
+                <div class="grid gap-5 sm:grid-cols-2">
+                    <div>
+                        <label for="phone" class="{{ $label }}">Phone <span class="text-tide-400">(optional)</span></label>
+                        <input id="phone" name="phone" type="tel" autocomplete="tel" maxlength="40"
+                               value="{{ old('phone', $user->phone) }}"
+                               class="mt-1.5 {{ $field }} @error('phone') ring-red-400 @enderror">
+                    </div>
+
+                    <div>
+                        <label for="country" class="{{ $label }}">Country <span class="text-tide-400">(optional)</span></label>
+                        @php
+                            $countries = [
+                                'CA' => 'Canada', 'US' => 'United States', 'GB' => 'United Kingdom',
+                                'IE' => 'Ireland', 'FR' => 'France', 'DE' => 'Germany',
+                                'NL' => 'Netherlands', 'AU' => 'Australia', 'NZ' => 'New Zealand',
+                            ];
+                            $selectedCountry = old('country', $user->country);
+                        @endphp
+                        <select id="country" name="country"
+                                class="mt-1.5 {{ $field }} @error('country') ring-red-400 @enderror">
+                            <option value="">Prefer not to say</option>
+                            @foreach ($countries as $code => $name)
+                                <option value="{{ $code }}" @selected($selectedCountry === $code)>{{ $name }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                </div>
+
+                <p class="text-[11px] leading-relaxed text-tide-500">
+                    We fill these into the booking form for you next time. They are not used for
+                    payment &mdash; your card is entered on Stripe's page and never stored here.
+                </p>
+
                 <button type="submit"
                         class="rounded-full bg-brand-600 px-7 py-3 text-sm font-semibold text-white transition hover:bg-brand-700">
                     Save changes

@@ -111,6 +111,38 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Direct payment for signed-in guests
+    |--------------------------------------------------------------------------
+    | A SIGNED-IN, EMAIL-VERIFIED guest booking their own address can go straight from the
+    | confirm button to Stripe instead of waiting for the emailed link. Same booking, same
+    | server-derived amount, same webhook — the only thing removed is the round trip through
+    | an inbox.
+    |
+    | WHY IT IS RESTRICTED TO THAT CASE
+    | The emailed link is not just a delivery mechanism: opening it proves the address on the
+    | booking reaches the person paying. A verified account already proves that, so for those
+    | guests the email is friction with no security value. For everyone else it stays.
+    |
+    | NO CARD IS SAVED, for these guests or any other. Signing in prefills DETAILS —
+    | name, email, phone, country — and nothing else. Every payment is a fresh card entry on
+    | Stripe's own hosted page; see App\Services\Payments\StripeGateway, which asserts the
+    | absence of every Stripe field that would store a payment method.
+    */
+    'direct_pay' => [
+        'enabled' => (bool) env('BOOKING_DIRECT_PAY', true),
+
+        /*
+        | The direct flow skips the email so the guest is not sent away mid-payment. If they
+        | abandon Stripe, though, they are left with a reservation and no link — so the email
+        | is queued with a DELAY as the fallback, and the job returns early if the payment has
+        | settled by the time it runs. Long enough not to race a guest who is typing their
+        | card, short enough that an abandoned booking is recoverable.
+        */
+        'fallback_email_delay_minutes' => (int) env('BOOKING_DIRECT_PAY_FALLBACK_DELAY', 20),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Guest-facing copy
     |--------------------------------------------------------------------------
     */

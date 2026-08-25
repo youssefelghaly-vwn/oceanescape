@@ -34,7 +34,9 @@ use Illuminate\Support\Facades\DB;
  *                                   one holds a write lock for the length of a network
  *                                   round trip — on SQLite that blocks the whole site.
  *   6. Issue the deposit link.      Queued. No money has moved yet, so nothing here is
- *                                   irreversible.
+ *                                   irreversible. A signed-in guest paying directly asks
+ *                                   for the row WITHOUT the email (see $emailFirstLink) and
+ *                                   is redirected to Stripe by the controller instead.
  *
  * NOTHING IS CHARGED ANYWHERE IN THIS CLASS. That is what makes failing safe easy: if any
  * step throws, we have at worst an orphaned local row and possibly an Open reservation,
@@ -54,10 +56,14 @@ class BookingCreator
 
     /**
      * @param  array<string, mixed>  $data  validated request data
+     * @param  bool  $emailFirstLink  false for the direct-payment flow, where the guest is
+     *                                redirected to Stripe now and the email is only queued
+     *                                as a delayed fallback by the caller. The payment ROW is
+     *                                created either way — only the mail is suppressed.
      *
      * @throws BookingException
      */
-    public function create(array $data): Booking
+    public function create(array $data, bool $emailFirstLink = true): Booking
     {
         $cottage = $this->lodgify->cottageBySlug((string) $data['slug']);
 
@@ -213,6 +219,7 @@ class BookingCreator
             $booking,
             $plan->firstPaymentType(),
             $plan->firstPaymentAmount(),
+            send: $emailFirstLink,
         );
 
         return $booking->refresh();

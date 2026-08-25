@@ -76,6 +76,34 @@ return [
             'replace_placeholders' => true,
         ],
 
+        /*
+        | Payment ATTEMPTS get their own channel, separate from `booking`.
+        |
+        | The booking channel carries the whole lifecycle — Lodgify writes, mail, status
+        | transitions — and during a payment incident that is mostly noise. This channel
+        | carries one line per attempt event and nothing else, so
+        |     grep PAY-XXXXXX storage/logs/payments-*.log
+        | is the complete story of every time a guest tried to pay: opened the link,
+        | reached Stripe, was declined, abandoned, paid, or let it expire.
+        |
+        | Retention is LONGER than the booking channel's 90 days on purpose. A card
+        | network chargeback can be raised up to 120 days after the charge, and the
+        | evidence we are asked for is exactly what is in here — when the guest paid,
+        | from which address, against which session. 400 days covers that plus a full
+        | season of comparison.
+        |
+        | Card data never reaches this file: everything written here goes through
+        | App\Support\ScrubbedContext, and we never see a card number in the first
+        | place (hosted Stripe Checkout — see App\Services\Payments\StripeGateway).
+        */
+        'payments' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/payments.log'),
+            'level' => env('LOG_LEVEL', 'info'),
+            'days' => env('PAYMENT_LOG_DAYS', 400),
+            'replace_placeholders' => true,
+        ],
+
         'single' => [
             'driver' => 'single',
             'path' => storage_path('logs/laravel.log'),

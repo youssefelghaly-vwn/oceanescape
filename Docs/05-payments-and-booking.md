@@ -47,6 +47,8 @@ payment path is absent, the read fallback is intentionally kept.
 | Decision | Choice | Why |
 |---|---|---|
 | Deposit timing | Booking first, then an emailed link | Nothing is charged when the guest confirms; the payment link follows by email. |
+| Signed-in guests | **May pay immediately** | Opening an emailed link proves the address reaches the payer. A verified account booking its own address has already proved that, so for them the inbox round trip is friction with no security value. Everyone else still gets the email. |
+| Stored cards | **Never, for anyone** | Signing in prefills DETAILS. Every payment is a fresh card entry on Stripe's page — no `setup_future_usage`, no Customer, no vault. |
 | What flips `Open → Booked` | The **deposit** | Lodgify's own semantics, and it blocks the calendar as early as possible. |
 | Deposit amount | **Lodgify's `scheduled_payments`, strictly** | Lodgify is the authority on what is owed. Two systems disagreeing about money means the guest believes whichever they saw last. If Lodgify sends no schedule we **refuse** rather than guess. |
 | Card handling | **Hosted** Stripe Checkout | Card data never touches this server: PCI SAQ A, not SAQ A-EP. Same reasoning that kept the project out of PCI scope before. |
@@ -103,6 +105,36 @@ Order matters, and each step is ordered for a reason:
 outcome is an orphaned row and possibly an `Open` reservation, both of which
 `booking:expire-stale` releases.
 
+### Where the guest goes next
+
+Two exits from step 8, and the difference is *delivery only* — same booking, same
+server-derived amount, same webhook:
+
+| Exit | Who | What happens |
+|---|---|---|
+| `booking.submitted` — "check your email" | everyone else | `SendPaymentLink` goes out now. Opening that link is what proves the address belongs to the payer. |
+| `302` to `/pay/{token}` | signed in, **email verified**, booking **its own address** | Straight to our pay page and on to Stripe. The email still follows, delayed by `direct_pay.fallback_email_delay_minutes`, in case they abandon Stripe — `SendPaymentLink` returns early once the payment settles, so paying immediately sends nothing. |
+
+The posted `pay_now` field is a **request, not a permission**. `BookingController` re-decides
+from the session (`User::canBookDirectly()`), so posting `pay_now=1` from a guest session, an
+unverified account, or an account booking somebody else's address simply falls back to the
+email. `DirectPaymentTest` pins each of those four fallbacks, because the failure mode is
+silent: it would *look* like a working booking while having skipped the only step that proves
+the inbox is reachable.
+
+Two smaller behaviours ride along:
+
+- The details page **prefills** name, email, phone and country from the profile
+  (`User::bookingPrefill()`). Phone was the one required field the form could not fill, which
+  is why `users.phone` and `users.country` exist.
+- Phone and country given at booking are written back to the profile **only when blank
+  there**. Overwriting would let a stay booked for someone else rewrite the account holder's
+  own details.
+
+**No card is stored on either exit.** The redirect goes to *our* signed `/pay/{token}` route
+rather than a Stripe URL built inline, so session creation, re-minting and attempt logging
+stay in one place.
+
 ### Validation
 `StoreBookingRequest`. Note what is **absent**: any money field. There is no rule for a
 total, a deposit, or a currency, because a price a request can influence is a price a
@@ -146,6 +178,7 @@ Stripe hand back the same expired session forever).
 | `checkout.session.async_payment_succeeded` | Settle |
 | `checkout.session.async_payment_failed` | Mark failed |
 | `checkout.session.expired` | Mark expired; our own link may still be live |
+| `payment_intent.payment_failed` | **Logged only** — an attempt line with the decline code, no state change. Stripe Checkout lets the guest retry in the same session, so marking the payment failed would take a live link from someone whose next card would have worked |
 | `charge.refunded` | Record it. **Does not cancel the reservation** — a partial refund, a goodwill gesture and a real cancellation are indistinguishable here, and unbooking a stay is not a webhook's decision |
 | anything else | Recorded as `ignored`, answered 200 |
 
@@ -299,6 +332,19 @@ the same reasoning `LodgifyCheckout` documented for the old flow — we changed 
 the payment*, not whether we handle card data. No card number, CVC or expiry appears
 anywhere in the schema, the logs, or the audit trail.
 
+**Nor is any card kept.** `StripeGateway::sessionPayload()` omits every field that would make
+one reusable — `setup_future_usage`, `customer`, `customer_creation`,
+`saved_payment_method_options` — and `mode: payment` alone would not be enough, since
+`setup_future_usage` works in payment mode precisely so a one-off charge can still store the
+method. `customer_email` is a form prefill and creates no Customer object.
+
+This is worth a test rather than a comment because the direct-payment flow is exactly where
+someone would later reach for a stored card "for convenience": a signed-in guest who pays
+every season. `NoCardSavingTest` asserts the absence of each key, and separately walks
+`users`, `bookings` and `booking_payments` for any column whose name looks like it stores
+card data — because that is how the promise would actually break, via a migration adding a
+`payment_method_id` that then looks like it is meant to be filled.
+
 ## 4.5 Other controls
 
 - **Money in integer cents** throughout. `Money::fromFloat()` rounds instead of truncating,
@@ -323,6 +369,56 @@ Every state change is written to **two** places:
 - the `booking` log channel (`storage/logs/booking-*.log`, 90-day retention) — what you
   tail during an incident, and what survives the database being the thing that broke
 
+…and anything to do with money to a **third**.
+
+## The payment attempt log
+
+`storage/logs/payments-*.log`, the `payments` channel, 400-day retention.
+
+The booking channel carries the whole lifecycle — Lodgify writes, mail, transitions — and
+during a payment problem that is mostly noise. This file carries payment lines and nothing
+else, so the question support is actually asked has a one-command answer:
+
+```
+grep PAY-7K2QMD storage/logs/payments-*.log
+```
+
+That returns the whole attempt sequence in order: link opened, reached Stripe (and whether
+the session was reused), declined with the issuer's reason, abandoned, paid, expired.
+
+Retention is longer than the booking channel's 90 days deliberately. A card-network
+chargeback can be raised up to 120 days after the charge, and the evidence requested is
+exactly what is in here — when the guest paid, from which IP, against which session. 400 days
+covers that plus a season of comparison.
+
+### How events get there
+
+Two routes, and the first is what makes the file trustworthy:
+
+| Route | What it covers |
+|---|---|
+| **Mirrored** by `BookingAuditor` | Every `payment.*`, `stripe.*` and `lodgify.record_payment*` event, wherever it was raised — settler, sweeper, webhook, a service written next year. Prefix match, not a registry, so a new event lands here without anyone remembering to add it. `recordFailure()` mirrors at **error** level so `payment.amount_mismatch` is visible to anything alerting on level. |
+| **Explicit**, via `PaymentAttemptLog` | The attempt detail no audit row should carry: `reached_stripe` (with `reused_session`), `unavailable` (we could not open a session), `declined` (with the decline code). |
+
+Lines written by `PaymentAttemptLog` share a fixed shape — `attempt`, `mode`
+(`direct`/`link`), booking and payment reference, type, status, amount, guest email, session
+and intent ids, IP — because this file is read by `grep` far more often than by a person
+scrolling it. `mode` distinguishes an abandoned direct booking from an abandoned emailed one,
+which have different recovery paths.
+
+Events that only concern a booking (`booking.created`, `lodgify.mark_booked.*`) stay **out**.
+A Lodgify retry storm in here would make the file no better than the booking log, so
+`PaymentAttemptLogTest` asserts both directions: payment events present, booking-only events
+absent.
+
+### Declines
+
+`payment_intent.payment_failed` is handled purely to write this line. It changes **no state**:
+Stripe Checkout lets the guest try another card in the same session, so marking the payment
+failed would take a live link away from someone whose second card would have worked. Without
+the line, "I tried three times and it wouldn't work" is unanswerable from our side — every one
+of those attempts lives only in Stripe.
+
 ## The audit table is immutable
 
 No `updated_at`, and the model throws on `updating` and `deleting`. An audit trail that
@@ -330,11 +426,15 @@ can be edited is not an audit trail. Tested.
 
 ## Context is scrubbed centrally
 
-`BookingAuditor::scrub()` redacts any key containing `secret`, `password`, `token`,
+`App\Support\ScrubbedContext` redacts any key containing `secret`, `password`, `token`,
 `api_key`, `authorization`, `card`, `cvc`, `cvv`, `number`, `signature` or `client_secret`,
 at any depth, and summarises objects as `[ClassName]` rather than serialising them. Audit
 rows are read by more people than write the code that fills them, so "I'll be careful at
 the call site" does not survive a year of edits.
+
+It is one shared class rather than a method on `BookingAuditor` because the audit table and
+the payment attempt log must not drift apart: two copies would eventually redact one key in
+one place and not the other, which is how a secret ends up in a log file.
 
 ## Event vocabulary
 
@@ -349,6 +449,8 @@ payment.succeeded                payment.amount_mismatch          ← needs a hu
 payment.failed                   payment.settle_ignored_already_paid
 payment.expired                  payment.expired_by_sweeper
 payment.amount_drift             payment.link_send_exhausted
+payment.attempt                  ← the attempt log's own line: reached_stripe /
+                                   unavailable / declined
 lodgify.create.attempt/ok        lodgify.mark_booked.attempt/ok/failed
 lodgify.mark_booked.exhausted    ← guest paid, calendar wrong. ALERT
 lodgify.record_payment.ok/failed lodgify.release.ok
@@ -481,6 +583,8 @@ live API could not be probed from here.
 | `mark_booked_on` | `BOOKING_MARK_BOOKED_ON` | `deposit` | `balance` is supported but leaves dates unblocked |
 | `record_payments_in_lodgify` | `BOOKING_RECORD_PAYMENTS_IN_LODGIFY` | `true` | Best effort |
 | `alert_email` | `BOOKING_ALERT_EMAIL` | — | **Set this.** Paid-but-unconfirmed alerts |
+| `direct_pay.enabled` | `BOOKING_DIRECT_PAY` | `true` | Lets a verified, signed-in guest pay immediately. Checked in the controller, so off closes the POST path and not just the button |
+| `direct_pay.fallback_email_delay_minutes` | `BOOKING_DIRECT_PAY_FALLBACK_DELAY` | `20` | Delay on the fallback email for a guest who abandons Stripe |
 | `support_phone` / `support_email` | `BOOKING_SUPPORT_*` | | Guest-facing copy |
 
 ## `config/services.php → stripe`
@@ -493,6 +597,13 @@ live API could not be probed from here.
 | `webhook_tolerance` | `STRIPE_WEBHOOK_TOLERANCE` | 300s |
 | `api_version` | `STRIPE_API_VERSION` | **Leave unset.** Null uses the SDK's own pinned version, which its typed objects are written against |
 
+## `config/logging.php`
+
+| Channel | Env | Retention | Purpose |
+|---|---|---|---|
+| `booking` | `BOOKING_LOG_DAYS` | 90 days | The whole booking/payment lifecycle — the incident tail |
+| `payments` | `PAYMENT_LOG_DAYS` | 400 days | One line per payment attempt, nothing else. Chargeback evidence |
+
 ## Schema added
 
 | Table | Purpose |
@@ -502,13 +613,18 @@ live API could not be probed from here.
 | `stripe_webhook_events` | Webhook dedup + replayable payloads |
 | `booking_audit_logs` | Append-only trail |
 
+Also added, on `users`: `phone` and `country` — the prefill source for a returning guest's
+next booking (`bookings.guest_phone` / `guest_country` remain the record of what was given for
+*that* stay, and do not change when a profile is edited). Deliberately **not** added: any
+address, and nothing whatsoever to do with payment.
+
 Removed: `checkout_intents` (see the table at the top of this document).
 
 ---
 
 # Part 8 — Testing
 
-**136 tests, 551 assertions, all passing.** `php artisan test`
+**161 tests, 1,053 assertions, all passing.** `php artisan test`
 
 | Suite | Covers |
 |---|---|
@@ -526,6 +642,9 @@ Removed: `checkout_intents` (see the table at the top of this document).
 | `BookingDetailsPageTest` | Server-side pricing, price-drift warning, refusal when unpriceable, date validation, user prefill, CSRF + honeypot present |
 | `BookButtonTargetTest` | **Regression:** the cottage page's Book button points at our details step with the flag on, and at Lodgify with it off |
 | `EndToEndFlowTest` | The whole journey through real routes: cottage page → details → reserve → signed link → webhook → confirmed → balance link |
+| `DirectPaymentTest` | The signed-in pay-now path: redirect to the signed pay route, delayed fallback email, and the **four fallbacks** — signed out, unverified, booking someone else's address, feature disabled. Plus prefill, profile backfill, and that a booking for someone else does not rewrite the account holder's details |
+| `NoCardSavingTest` | The session payload omits `setup_future_usage`, `customer`, `customer_creation` and `saved_payment_method_options`; metadata carries references only; **no table has a column that looks like it stores card data** |
+| `PaymentAttemptLogTest` | Payment events reach `storage/logs/payments-*.log` and booking-only events do not; failures logged at error level; secrets redacted; a declined card logged **without** making the link unpayable |
 | `LodgifyWriteResponseShapeTest` | **Regression:** bare-integer / quoted-string / object / wrapped-object create responses, 2xx-with-no-id failing loudly, money-at-risk severity, and no transport-level retry on writes |
 | `ReconcileOrphansTest` | Report-vs-link, confident match, refusing an ambiguous or someone-else's reservation, email disambiguation, and not reviving a `failed` booking |
 | `NoLodgifyCheckoutTest` | The hosted-checkout classes, routes, table, column and settings are all absent — and the read-only `checkout.lodgify.com` fallback is deliberately kept |
