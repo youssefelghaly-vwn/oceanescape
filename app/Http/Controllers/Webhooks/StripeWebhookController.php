@@ -5,7 +5,7 @@ namespace App\Http\Controllers\Webhooks;
 use App\Enums\PaymentStatus;
 use App\Models\BookingPayment;
 use App\Models\StripeWebhookEvent;
-use App\Services\Payments\PaymentAttemptLog;
+use App\Services\Booking\BookingAuditor;
 use App\Services\Payments\PaymentSettler;
 use App\Services\Payments\StripeGateway;
 use App\Support\Money;
@@ -45,7 +45,7 @@ class StripeWebhookController extends Controller
     public function __construct(
         protected StripeGateway $stripe,
         protected PaymentSettler $settler,
-        protected PaymentAttemptLog $attempts,
+        protected BookingAuditor $auditor,
     ) {}
 
     public function handle(Request $request): Response
@@ -253,13 +253,18 @@ class StripeWebhookController extends Controller
 
         $error = $intent->last_payment_error ?? null;
 
-        $this->attempts->declined(
-            $payment,
+        /*
+         * Through the auditor rather than straight to the log, so a decline appears in the
+         * booking's own trail in the admin area — "I tried three times" has to be answerable
+         * by whoever picks up the phone, not only by someone with shell access. The auditor
+         * mirrors every payment.* event into the payments channel, so the log line comes free.
+         */
+        $this->auditor->record('payment.declined', $payment->booking, $payment, [
             // decline_code is the issuer's reason where there is one; code is Stripe's.
-            $error->decline_code ?? $error->code ?? null,
-            $error->message ?? null,
-            ['intent' => $intent->id ?? null],
-        );
+            'decline_code' => $error->decline_code ?? $error->code ?? null,
+            'decline_message' => $error->message ?? null,
+            'intent' => $intent->id ?? null,
+        ], actorType: 'stripe');
 
         return $payment->getKey();
     }

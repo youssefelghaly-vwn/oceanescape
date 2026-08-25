@@ -259,8 +259,15 @@ class PaymentSettler
     {
         try {
             Mail::to($booking->guest_email)->send(new BookingConfirmed($booking->fresh(), $payment));
+
+            $this->auditor->record('mail.sent', $booking, $payment, [
+                'mail' => 'booking_confirmed',
+                'to' => $booking->guest_email,
+            ]);
         } catch (\Throwable $e) {
-            $this->auditor->recordFailure('booking.confirmation_mail_failed', $booking, $payment, [
+            $this->auditor->recordFailure('mail.failed', $booking, $payment, [
+                'mail' => 'booking_confirmed',
+                'to' => $booking->guest_email,
                 'message' => $e->getMessage(),
             ]);
         }

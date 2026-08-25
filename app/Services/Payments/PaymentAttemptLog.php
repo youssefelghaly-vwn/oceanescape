@@ -28,7 +28,9 @@ use Illuminate\Support\Facades\Request;
  * events (BookingAuditor mirrors `payment.*` and `stripe.*` events into this channel, so
  * an event raised anywhere in the codebase lands here without a call to this class). This
  * class exists for the attempt-specific detail that has no business in an audit row: which
- * Stripe session was reused, and what the decline code was.
+ * Stripe session was reused, and why we could not open one at all. Everything with a
+ * lifecycle meaning — created, link sent, opened, declined, paid, expired — goes through
+ * BookingAuditor instead, so it lands in the admin trail as well as here.
  *
  * WHAT IS NEVER WRITTEN HERE
  * Card numbers (we never see one — hosted Stripe Checkout), Stripe secrets, webhook
@@ -61,22 +63,6 @@ class PaymentAttemptLog
     public function unavailable(BookingPayment $payment, string $reason, array $context = []): void
     {
         $this->write('unavailable', $payment, $context + ['reason' => $reason], level: 'error');
-    }
-
-    /**
-     * Stripe declined the card, or the payment otherwise failed inside the session.
-     *
-     * A decline is not the end of the sequence — the link stays usable and the guest can
-     * try another card — so this changes no state. It is logged because "I tried three
-     * times" is otherwise unanswerable: Stripe holds the declines, we hold the booking, and
-     * only this line joins the two.
-     */
-    public function declined(BookingPayment $payment, ?string $code, ?string $message, array $context = []): void
-    {
-        $this->write('declined', $payment, $context + [
-            'decline_code' => $code,
-            'decline_message' => $message,
-        ], level: 'warning');
     }
 
     /**

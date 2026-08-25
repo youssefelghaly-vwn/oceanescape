@@ -2,7 +2,13 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Enums\BookingStatus;
+use App\Enums\PaymentType;
+use App\Models\Booking;
+use App\Models\BookingAuditLog;
+use App\Services\Booking\BookingAuditor;
 use App\Services\Lodgify\ReservationRepository;
+use App\Services\Payments\PaymentLinkService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -45,7 +51,13 @@ class ReservationController extends Controller
             'from'        => $request->query('from'),
             'to'          => $request->query('to'),
             'unpaid'      => $request->boolean('unpaid'),
-            'sort'        => $request->query('sort', 'arrival'),
+            /*
+             * Newest FIRST by default, on the date the booking was made rather than the
+             * date of the stay. Opening this screen is nearly always "what came in?", and
+             * arrival-order buried a booking taken this morning for next August somewhere in
+             * the middle of the list.
+             */
+            'sort'        => $request->query('sort', 'created'),
             'dir'         => $request->query('dir', 'desc'),
         ];
 
@@ -90,16 +102,151 @@ class ReservationController extends Controller
         ]);
     }
 
-    /** GET /admin/reservations/{id} */
+    /**
+     * GET /admin/reservations/{id}
+     *
+     * TWO SOURCES ON ONE PAGE, and they answer different questions:
+     *
+     *   Lodgify   the reservation itself — dates, guest, status, its own totals. Live, and
+     *             authoritative: Lodgify owns the booking.
+     *   Us        the money. What we quoted, what we asked for, what Stripe captured, which
+     *             links were emailed and when, and the audit trail behind all of it.
+     *
+     * They are joined on `bookings.lodgify_booking_id`. A reservation with no local row is
+     * normal, not an error — anything taken by phone, or through Airbnb or Booking.com,
+     * exists only in Lodgify, and the page says so rather than implying data is missing.
+     */
     public function show(string $id): View
     {
         $reservation = $this->reservations->find($id);
 
-        if (!$reservation) {
+        if (! $reservation) {
             throw new NotFoundHttpException("Reservation {$id} not found");
         }
 
-        return view('admin.reservations.show', ['reservation' => $reservation]);
+        $booking = $this->localBookingFor($id);
+
+        return view('admin.reservations.show', [
+            'reservation' => $reservation,
+            'booking' => $booking,
+            /*
+             * The recent trail inline, with a link to the whole thing. Enough to see what
+             * happened without leaving the page, and never so much that the reservation
+             * itself is pushed off the screen.
+             */
+            'audits' => $booking
+                ? BookingAuditLog::query()
+                    ->with('bookingPayment:id,reference,type')
+                    ->where('booking_id', $booking->getKey())
+                    ->orderByDesc('created_at')->orderByDesc('id')
+                    ->limit(12)->get()
+                : collect(),
+            'auditTotal' => $booking ? BookingAuditLog::where('booking_id', $booking->getKey())->count() : 0,
+            'outstanding' => $booking?->amountOutstanding(),
+            'sendable' => $booking ? $this->nextPaymentToRequest($booking) : null,
+        ]);
+    }
+
+    /**
+     * POST /admin/reservations/{id}/payment-link
+     *
+     * "Email them the link for what is still owed."
+     *
+     * Deliberately NOT "send the balance link": what is outstanding depends on the booking.
+     * A deposit that was never paid needs the deposit link again, not a balance link for
+     * money we have not asked for yet. The button names whichever it is, and this method
+     * re-derives it rather than trusting the form.
+     *
+     * NOTHING HERE INVENTS AN AMOUNT. It comes from the booking's stored plan, which came
+     * from Lodgify's own schedule at booking time — the same figures the guest already
+     * agreed to.
+     */
+    public function sendPaymentLink(string $id, PaymentLinkService $links, BookingAuditor $auditor): RedirectResponse
+    {
+        $booking = $this->localBookingFor($id);
+
+        if (! $booking) {
+            return back()->with('status', 'That reservation was not taken on this site, so there is no payment to send.');
+        }
+
+        $type = $this->nextPaymentToRequest($booking);
+
+        if (! $type) {
+            return back()->with('status', "Nothing is outstanding on {$booking->reference} — no email sent.");
+        }
+
+        $amount = $type === PaymentType::Balance
+            ? $booking->balanceAmount()
+            : $booking->depositAmount();
+
+        try {
+            /*
+             * issue() is idempotent on (booking, type): an existing row is reused rather
+             * than re-priced, and the queued job rebuilds the Stripe session from it. So a
+             * double-clicked button re-sends ONE link — it can never create a second
+             * payable amount.
+             */
+            $payment = $links->issue($booking, $type, $amount);
+
+            $auditor->record('payment.link_requested_by_admin', $booking, $payment, [
+                'type' => $type->value,
+                'amount' => $amount->format(),
+                'to' => $booking->guest_email,
+            ], actorType: 'admin');
+
+            /*
+             * Move the booking to awaiting_balance only when that is actually the step being
+             * taken, and only when the transition is legal — re-sending a deposit link must
+             * not advance anything.
+             */
+            if ($type === PaymentType::Balance && $booking->status->canTransitionTo(BookingStatus::AwaitingBalance)) {
+                $booking->transitionTo(BookingStatus::AwaitingBalance);
+            }
+        } catch (\Throwable $e) {
+            report($e);
+
+            return back()->with('status', "Could not send that link: {$e->getMessage()}");
+        }
+
+        return back()->with('status', sprintf(
+            '%s link for %s queued to %s.',
+            ucfirst($type->value),
+            $amount->format(),
+            $booking->guest_email,
+        ));
+    }
+
+    /** Our own record of a Lodgify reservation, if this booking came through this site. */
+    protected function localBookingFor(string $lodgifyBookingId): ?Booking
+    {
+        return Booking::query()
+            ->with(['payments', 'user:id,name,email'])
+            ->where('lodgify_booking_id', $lodgifyBookingId)
+            ->first();
+    }
+
+    /**
+     * Which payment, if any, we should be asking this guest for.
+     *
+     * Returns null when there is nothing to chase: no money outstanding, a terminal booking,
+     * or a payment of that type that is already settled.
+     */
+    protected function nextPaymentToRequest(Booking $booking): ?PaymentType
+    {
+        if ($booking->status->isTerminal() || ! $booking->amountOutstanding()->isPositive()) {
+            return null;
+        }
+
+        $deposit = $booking->deposit();
+
+        // The deposit (or a single full payment) still owing takes precedence: until it is
+        // paid the dates are not even held, so a balance link would be asking for the wrong
+        // thing at the wrong time.
+        if ($deposit && ! $deposit->status->isSettled()) {
+            return $deposit->type;
+        }
+
+        return $booking->balanceAmount()->isPositive() ? PaymentType::Balance : null;
     }
 
     /**

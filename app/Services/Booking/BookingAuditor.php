@@ -83,7 +83,7 @@ class BookingAuditor
             'context' => $clean ?: null,
         ], fn ($v) => $v !== null));
 
-        if ($this->isPaymentEvent($event)) {
+        if ($this->isPaymentEvent($event, $payment)) {
             $this->attempts->event($event, $booking, $payment, $clean);
         }
     }
@@ -133,7 +133,7 @@ class BookingAuditor
          * at info would otherwise be invisible to anything alerting on level — and
          * payment.amount_mismatch is precisely the line that must not be missed.
          */
-        if ($this->isPaymentEvent($event)) {
+        if ($this->isPaymentEvent($event, $payment)) {
             $this->attempts->event($event, $booking, $payment, $clean, level: 'error');
         }
     }
@@ -159,8 +159,16 @@ class BookingAuditor
      * here. `lodgify.record_payment.*` is included because reporting a payment back to
      * Lodgify is part of the payment's story even though it is a Lodgify call.
      */
-    protected function isPaymentEvent(string $event): bool
+    protected function isPaymentEvent(string $event, ?BookingPayment $payment = null): bool
     {
+        /*
+         * `mail.*` counts only when a payment is attached: a payment-link email is part of
+         * the payment's story, an ops alert about a Lodgify write is not.
+         */
+        if (str_starts_with($event, 'mail.')) {
+            return $payment !== null;
+        }
+
         return str_starts_with($event, 'payment.')
             || str_starts_with($event, 'stripe.')
             || str_starts_with($event, 'lodgify.record_payment');

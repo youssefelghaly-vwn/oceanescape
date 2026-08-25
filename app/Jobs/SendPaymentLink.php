@@ -60,14 +60,34 @@ class SendPaymentLink implements ShouldQueue
 
         $payment = $links->prepareSession($payment);
 
-        Mail::to($payment->booking->guest_email)
-            ->send(new PaymentLinkMail($payment->booking->fresh(), $payment->fresh()));
+        /*
+         * The handoff to the mail transport is audited separately from the payment
+         * lifecycle, because "we issued a link" and "the mail actually left" are different
+         * facts and support gets asked about the second one. `mail.failed` is recorded and
+         * then rethrown so the job still retries — the audit row must not swallow the error.
+         */
+        try {
+            Mail::to($payment->booking->guest_email)
+                ->send(new PaymentLinkMail($payment->booking->fresh(), $payment->fresh()));
+        } catch (\Throwable $e) {
+            $auditor->recordFailure('mail.failed', $payment->booking, $payment, [
+                'mail' => 'payment_link',
+                'type' => $payment->type->value,
+                'to' => $payment->booking->guest_email,
+                'message' => $e->getMessage(),
+            ]);
+
+            throw $e;
+        }
 
         $links->markLinkSent($payment);
 
-        $auditor->record('payment.link_emailed', $payment->booking, $payment, [
+        $auditor->record('mail.sent', $payment->booking, $payment, [
+            'mail' => 'payment_link',
             'type' => $payment->type->value,
             'to' => $payment->booking->guest_email,
+            'amount' => $payment->amount()->format(),
+            'attempt' => $payment->link_send_count,
         ]);
     }
 

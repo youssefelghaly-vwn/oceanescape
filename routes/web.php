@@ -300,6 +300,15 @@ Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(fun
     Route::get('/reservations',        [AdminReservationController::class, 'index'])->name('reservations.index');
     Route::post('/reservations/refresh',[AdminReservationController::class, 'refresh'])->name('reservations.refresh');
     Route::get('/reservations/{id}',   [AdminReservationController::class, 'show'])->name('reservations.show');
+
+    /*
+     * Email the guest whatever is still owed. POST, and CSRF-protected by the web group:
+     * it queues a real email about real money, so it must not be reachable by following a
+     * link (or by a page prefetching one).
+     */
+    Route::post('/reservations/{id}/payment-link', [AdminReservationController::class, 'sendPaymentLink'])
+        ->middleware('throttle:12,1')
+        ->name('reservations.payment-link');
 });
 
 // comment

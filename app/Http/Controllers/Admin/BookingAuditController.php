@@ -39,6 +39,7 @@ class BookingAuditController extends Controller
         'payment' => 'Payment',
         'stripe' => 'Stripe',
         'lodgify' => 'Lodgify',
+        'mail' => 'Email',
     ];
 
     /** Who or what caused the row. Matches the values BookingAuditor writes. */

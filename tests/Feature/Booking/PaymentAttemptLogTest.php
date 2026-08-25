@@ -4,9 +4,9 @@ namespace Tests\Feature\Booking;
 
 use App\Enums\PaymentStatus;
 use App\Models\Booking;
+use App\Models\BookingAuditLog;
 use App\Models\BookingPayment;
 use App\Services\Booking\BookingAuditor;
-use App\Services\Payments\PaymentAttemptLog;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Mail;
@@ -145,7 +145,8 @@ class PaymentAttemptLogTest extends TestCase
     {
         $payment = BookingPayment::factory()->for(Booking::factory())->create();
 
-        app(PaymentAttemptLog::class)->declined($payment, 'card_declined', 'Your card was declined.', [
+        app(BookingAuditor::class)->record('payment.declined', $payment->booking, $payment, [
+            'decline_code' => 'card_declined',
             'card_number' => '4242424242424242',
             'client_secret' => 'pi_secret_xyz',
             'api_key' => 'sk_live_nope',
@@ -184,9 +185,25 @@ class PaymentAttemptLogTest extends TestCase
 
         $log = $this->log();
 
-        $this->assertStringContainsString('"attempt":"declined"', $log);
+        $this->assertStringContainsString('payment.declined', $log);
         $this->assertStringContainsString('insufficient_funds', $log);
         $this->assertStringContainsString($payment->reference, $log);
+
+        /*
+         * And in the audit table, which is what the admin screens read. A decline that only
+         * reached a log file cannot be seen by whoever takes the guest's call.
+         */
+        $this->assertDatabaseHas('booking_audit_logs', [
+            'booking_id' => $booking->getKey(),
+            'booking_payment_id' => $payment->getKey(),
+            'event' => 'payment.declined',
+            'actor_type' => 'stripe',
+        ]);
+
+        $this->assertSame(
+            'insufficient_funds',
+            BookingAuditLog::where('event', 'payment.declined')->first()->context['decline_code'],
+        );
 
         /*
          * A decline is not the end of the attempt sequence: Stripe Checkout lets the guest
@@ -241,6 +258,35 @@ class PaymentAttemptLogTest extends TestCase
             ]],
         ])->assertOk();
 
-        $this->assertStringNotContainsString('declined', $this->log());
+        $this->assertStringNotContainsString('payment.declined', $this->log());
+        $this->assertDatabaseMissing('booking_audit_logs', ['event' => 'payment.declined']);
+    }
+
+    #[Test]
+    public function mail_about_a_payment_reaches_the_payment_log_but_an_ops_alert_does_not(): void
+    {
+        /*
+         * `mail.*` is mirrored into the payments channel only when a payment is attached. A
+         * payment-link email is part of that payment's story; an ops alert about a Lodgify
+         * write is not, and letting it in would start the drift that makes this file as noisy
+         * as the booking log.
+         */
+        $payment = BookingPayment::factory()->for(Booking::factory())->create();
+
+        app(BookingAuditor::class)->record('mail.sent', $payment->booking, $payment, [
+            'mail' => 'payment_link', 'to' => $payment->booking->guest_email,
+        ]);
+
+        app(BookingAuditor::class)->record('mail.sent', $payment->booking, null, [
+            'mail' => 'needs_attention_alert', 'to' => 'ops@example.test',
+        ]);
+
+        $log = $this->log();
+
+        $this->assertStringContainsString('payment_link', $log);
+        $this->assertStringNotContainsString('needs_attention_alert', $log);
+
+        // Both are in the trail either way — only the log file is selective.
+        $this->assertSame(2, BookingAuditLog::where('event', 'mail.sent')->count());
     }
 }

@@ -152,6 +152,13 @@ class MarkLodgifyBookingBooked implements ShouldQueue
 
         try {
             Mail::to($alertTo)->send(new BookingNeedsAttention($booking, $e->getMessage()));
+
+            // Audited like any other mail, so the booking's own trail shows that a human
+            // was told — which is the question asked when nobody acted on it.
+            app(BookingAuditor::class)->record('mail.sent', $booking, context: [
+                'mail' => 'needs_attention_alert',
+                'to' => $alertTo,
+            ]);
         } catch (\Throwable $mailFailure) {
             Log::channel('booking')->critical(
                 'Could not send the paid-but-unconfirmed alert.',

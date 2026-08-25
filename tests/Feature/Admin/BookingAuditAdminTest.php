@@ -163,6 +163,56 @@ class BookingAuditAdminTest extends TestCase
     }
 
     #[Test]
+    public function the_email_filter_shows_what_was_sent_and_what_failed(): void
+    {
+        /*
+         * "Did they get the email?" is one of the two questions support is actually asked
+         * (the other being "did the payment go through"), so delivery is audited at the send
+         * site — sent and failed alike — and gets its own filter.
+         */
+        $booking = $this->bookingWithTrail();
+        $payment = $booking->payments()->firstOrFail();
+        $auditor = app(BookingAuditor::class);
+
+        $auditor->record('mail.sent', $booking, $payment, [
+            'mail' => 'payment_link', 'to' => 'alex@example.test', 'attempt' => 1,
+        ]);
+        $auditor->recordFailure('mail.failed', $booking, $payment, [
+            'mail' => 'payment_link', 'to' => 'alex@example.test', 'message' => 'Connection refused',
+        ]);
+
+        $response = $this->actingAs($this->admin())
+            ->get('/admin/audits?group=mail')
+            ->assertOk()
+            ->assertSee('mail.sent')
+            ->assertSee('mail.failed')
+            ->assertSee('Connection refused')
+            ->assertDontSee('booking.created');
+
+        // A mail that never left is a human's problem: the guest is waiting for a link that
+        // does not exist.
+        $response->assertSee('needs a human');
+    }
+
+    #[Test]
+    public function a_declined_card_appears_in_the_trail_with_its_reason(): void
+    {
+        $booking = $this->bookingWithTrail();
+        $payment = $booking->payments()->firstOrFail();
+
+        app(BookingAuditor::class)->record('payment.declined', $booking, $payment, [
+            'decline_code' => 'insufficient_funds',
+            'decline_message' => 'Your card has insufficient funds.',
+        ], actorType: 'stripe');
+
+        $this->actingAs($this->admin())
+            ->get('/admin/audits?group=payment')
+            ->assertOk()
+            ->assertSee('payment.declined')
+            ->assertSee('insufficient_funds');
+    }
+
+    #[Test]
     public function context_is_shown_but_secrets_never_are(): void
     {
         $booking = Booking::factory()->create();

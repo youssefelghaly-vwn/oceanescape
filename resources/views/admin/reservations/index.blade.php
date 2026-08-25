@@ -159,10 +159,11 @@
                                 'guest'    => 'Guest',
                                 'property' => 'Cottage',
                                 'arrival'  => 'Stay',
+                                'created'  => 'Booked',
                                 'total'    => 'Total',
                             ] as $key => $heading)
                                 @php
-                                    $isActive = ($filters['sort'] ?? 'arrival') === $key;
+                                    $isActive = ($filters['sort'] ?? 'created') === $key;
                                     $nextDir  = ($isActive && ($filters['dir'] ?? 'desc') === 'desc') ? 'asc' : 'desc';
                                 @endphp
                                 <th class="px-5 py-3 font-medium">
@@ -218,6 +219,19 @@
                                     <span class="block text-xs text-tide-500">
                                         {{ $r->nights ? $r->nights . ' nights · ' : '' }}{{ $r->guestCount() }} guests
                                     </span>
+                                </td>
+
+                                {{-- When the booking was MADE, which is what the list is
+                                     sorted by. Distinct from the stay dates beside it, and
+                                     the pair is what tells you a last-minute booking from
+                                     one taken months ago. --}}
+                                <td class="whitespace-nowrap px-5 py-4 text-tide-700">
+                                    @if ($r->createdAt)
+                                        {{ $r->createdAt->format('M j, Y') }}
+                                        <span class="block text-xs text-tide-500">{{ $r->createdAt->diffForHumans(short: true) }}</span>
+                                    @else
+                                        <span class="text-tide-400">&mdash;</span>
+                                    @endif
                                 </td>
 
                                 <td class="whitespace-nowrap px-5 py-4">

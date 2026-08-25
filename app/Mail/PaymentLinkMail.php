@@ -12,7 +12,13 @@ use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
 
 /**
- * The email carrying a payment link — deposit, balance, or full.
+ * The email carrying a payment link.
+ *
+ * TWO TEMPLATES, ONE MAILABLE. `mail.payment-deposit` and `mail.payment-balance` are
+ * separate files because they are separate messages: the deposit mail has to say that the
+ * dates are NOT held and will be released when the link expires, while the balance mail goes
+ * to someone whose stay is already confirmed and nothing is at risk. Branching inside one
+ * template produced copy that read as neither.
  *
  * The link is generated at RENDER time from BookingPayment::payUrl(), which mints a fresh
  * signed, expiring URL. It is not stored on the model or in this class, so a queued
@@ -47,15 +53,24 @@ class PaymentLinkMail extends Mailable
 
     public function content(): Content
     {
+        $isBalance = $this->payment->type === PaymentType::Balance;
+
         return new Content(
-            markdown: 'mail.payment-link',
+            markdown: $isBalance ? 'mail.payment-balance' : 'mail.payment-deposit',
             with: [
                 'booking' => $this->booking,
                 'payment' => $this->payment,
                 'payUrl' => $this->payment->payUrl(),
                 'amount' => $this->payment->amount(),
                 'expires' => $this->payment->link_expires_at,
-                'isFinal' => $this->payment->type !== PaymentType::Deposit,
+                /*
+                 * A stay inside `full_payment_within_days` is charged once, so the deposit
+                 * template must not promise a balance mail that will never arrive.
+                 */
+                'isFullPayment' => $this->payment->type === PaymentType::Full,
+                'daysToArrival' => $this->booking->arrival
+                    ? (int) now()->startOfDay()->diffInDays($this->booking->arrival->startOfDay(), false)
+                    : null,
             ],
         );
     }

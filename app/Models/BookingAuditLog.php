@@ -56,7 +56,7 @@ class BookingAuditLog extends Model
     // ============================================================== scopes
 
     /**
-     * The dotted prefix an event belongs to: booking / payment / stripe / lodgify.
+     * The dotted prefix an event belongs to: booking / payment / stripe / lodgify / mail.
      *
      * Filtering by prefix rather than by an enumerated list of event names, for the same
      * reason BookingAuditor mirrors by prefix: a new `payment.*` event has to appear in the
@@ -94,7 +94,7 @@ class BookingAuditLog extends Model
         'payment.amount_drift',
         'booking.lodgify_create_failed',
         'booking.unexpected_transition',
-        'booking.confirmation_mail_failed',
+        'mail.failed',
         'lodgify.mark_booked.failed',
         'lodgify.mark_booked.exhausted',
         'lodgify.record_payment.failed',
@@ -156,6 +156,7 @@ class BookingAuditLog extends Model
 
         return match ($this->group) {
             'payment' => 'bg-emerald-50 text-emerald-800 ring-emerald-200',
+            'mail' => 'bg-sky-50 text-sky-800 ring-sky-200',
             'stripe' => 'bg-indigo-50 text-indigo-800 ring-indigo-200',
             'lodgify' => 'bg-amber-50 text-amber-800 ring-amber-200',
             default => 'bg-fog-100 text-tide-700 ring-fog-300',

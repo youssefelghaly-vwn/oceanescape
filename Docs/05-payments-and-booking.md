@@ -137,6 +137,18 @@ needs a recorded yes.
 
 `SendPaymentLink` job → `PaymentLinkService::prepareSession` → `PaymentLinkMail`
 
+**Two templates, one mailable.** `mail.payment-deposit` and `mail.payment-balance` are
+separate files because they are separate messages:
+
+| | Says | Because |
+|---|---|---|
+| Deposit (or single full payment) | the dates are **not held yet**, and the link's expiry is when we release them | until it is paid, an `Open` Lodgify reservation blocks nothing |
+| Balance | the stay **is confirmed**; here is the remainder, and a lapsed link is no cause for alarm | nothing is at risk, and the deposit's warning would be untrue and frightening |
+
+A single branching template produced copy that read as neither. `PaymentMailTest` pins the
+difference — including that a single full payment never promises a balance email that will
+not arrive.
+
 The email carries a link to **our** domain, never a raw Stripe URL:
 
 | Reason | Detail |
@@ -416,6 +428,7 @@ questions:
 |---|---|
 | `/admin/audits` | *What has been happening?* Every event, newest first, filtered by prefix (booking / payment / stripe / lodgify), actor, or free text over booking reference, payment reference, guest email and cottage. |
 | `/admin/audits/{booking}` | *What happened to this booking?* Its whole trail oldest-first — the order it has to be read in to explain anything — beside its status, money and payment rows. |
+| `/admin/reservations/{id}` | *What is going on with this guest?* Lodgify's reservation and our payment record on one page, joined on `bookings.lodgify_booking_id`, with the last dozen audit rows inline and a button to email whatever is still owed. |
 
 A **Needs a human** filter and counter pick out the events the vocabulary below marks as
 needing attention (`payment.amount_mismatch`, `lodgify.mark_booked.exhausted`, and the rest
@@ -449,8 +462,13 @@ one place and not the other, which is how a secret ends up in a log file.
 booking.created                  booking.duplicate_suppressed
 booking.awaiting_deposit         booking.lodgify_create_failed
 booking.advanced                 booking.unexpected_transition
-booking.expired_unpaid           booking.confirmation_mail_failed
-payment.created                  payment.link_sent / link_emailed / link_opened
+booking.expired_unpaid
+payment.created                  payment.link_sent / link_opened
+payment.declined                 ← card refused; changes NO state, guest may retry
+payment.link_requested_by_admin  ← someone pressed the button in /admin/reservations
+mail.sent / mail.failed          ← the handoff to the mail transport itself.
+                                   mail.failed needs a human: the guest is waiting for
+                                   a link that does not exist
 payment.link_refreshed           payment.checkout_abandoned
 payment.succeeded                payment.amount_mismatch          ← needs a human
 payment.failed                   payment.settle_ignored_already_paid
@@ -629,7 +647,7 @@ Removed: `checkout_intents` (see the table at the top of this document).
 
 # Part 8 — Testing
 
-**175 tests, 1,107 assertions, all passing.** `php artisan test`
+**193 tests, 1,184 assertions, all passing.** `php artisan test`
 
 | Suite | Covers |
 |---|---|
@@ -649,6 +667,8 @@ Removed: `checkout_intents` (see the table at the top of this document).
 | `EndToEndFlowTest` | The whole journey through real routes: cottage page → details → reserve → signed link → webhook → confirmed → balance link |
 | `NoCardSavingTest` | The session payload omits `setup_future_usage`, `customer`, `customer_creation` and `saved_payment_method_options`; metadata carries references only; **no table has a column that looks like it stores card data** |
 | `PaymentAttemptLogTest` | Payment events reach `storage/logs/payments-*.log` and booking-only events do not; failures logged at error level; secrets redacted; a declined card logged **without** making the link unpayable |
+| `PaymentMailTest` | The two payment emails: the deposit warns that dates will be released, the balance reassures and must NOT carry that warning, a full payment promises no balance mail, both carry the reference and a signed link, neither mentions a stored card |
+| `ReservationPaymentPanelTest` | Lodgify + our payment record on one page, a capture mismatch called out, the inline trail, the "no local booking" case, and the email button: balance when the deposit is paid, deposit when it is not, idempotent on a double press, silent when nothing is owed, admin-only |
 | `BookingAuditAdminTest` | The audit screens: signed-out redirect and non-admin 403 on **both** routes, event listing, prefix and needs-a-human filters, search by booking/payment reference and email, secrets still redacted on screen, **no mutating affordance on the page**, trail ordering, and a trail that outlives its deleted booking |
 | `LodgifyWriteResponseShapeTest` | **Regression:** bare-integer / quoted-string / object / wrapped-object create responses, 2xx-with-no-id failing loudly, money-at-risk severity, and no transport-level retry on writes |
 | `ReconcileOrphansTest` | Report-vs-link, confident match, refusing an ambiguous or someone-else's reservation, email disambiguation, and not reviving a `failed` booking |

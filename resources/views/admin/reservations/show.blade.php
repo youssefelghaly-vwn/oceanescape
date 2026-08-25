@@ -141,6 +141,165 @@
                 </section>
             @endif
 
+            {{-- ======================================================= OUR SIDE ==
+                 Everything above this point is Lodgify's: the reservation as the PMS holds
+                 it. What follows is ours — the money, the emails and the trail — joined on
+                 bookings.lodgify_booking_id.
+
+                 A reservation with no local row is normal: anything taken by phone, or via
+                 Airbnb or Booking.com, exists only in Lodgify. The page says that plainly
+                 rather than rendering an empty payments panel that looks like a fault. --}}
+            @if ($booking)
+                <section class="rounded-3xl bg-white p-6 ring-1 ring-black/5">
+                    <div class="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                            <h2 class="font-mono text-[10px] uppercase tracking-wide text-tide-500">
+                                Payments &middot; taken on this site
+                            </h2>
+                            <p class="mt-1 font-mono text-xs text-tide-600">{{ $booking->reference }}</p>
+                        </div>
+                        <span class="inline-flex rounded-full px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-wide ring-1 {{ $booking->status->classes() }}">
+                            {{ $booking->status->label() }}
+                        </span>
+                    </div>
+
+                    {{-- OUR figures, not Lodgify's. They should agree; when they do not,
+                         seeing both side by side on one page is the whole point. --}}
+                    <dl class="mt-5 grid gap-4 border-t border-fog-200 pt-5 text-sm sm:grid-cols-3">
+                        <div>
+                            <dt class="font-mono text-[10px] uppercase tracking-wide text-tide-500">Total</dt>
+                            <dd class="mt-0.5 font-medium text-ink-900">{{ $booking->total()->format() }}</dd>
+                        </div>
+                        <div>
+                            <dt class="font-mono text-[10px] uppercase tracking-wide text-tide-500">Paid</dt>
+                            <dd class="mt-0.5 font-medium text-emerald-700">{{ $booking->amountPaid()->format() }}</dd>
+                        </div>
+                        <div>
+                            <dt class="font-mono text-[10px] uppercase tracking-wide text-tide-500">Outstanding</dt>
+                            <dd class="mt-0.5 font-medium {{ $outstanding->isPositive() ? 'text-amber-700' : 'text-tide-500' }}">
+                                {{ $outstanding->format() }}
+                            </dd>
+                        </div>
+                    </dl>
+
+                    <ul class="mt-5 divide-y divide-fog-200 border-t border-fog-200">
+                        @forelse ($booking->payments as $payment)
+                            <li class="py-4">
+                                <div class="flex flex-wrap items-center justify-between gap-3">
+                                    <span class="text-sm font-medium text-ink-900">
+                                        {{ ucfirst($payment->type->value) }} &middot; {{ $payment->amount()->format() }}
+                                    </span>
+                                    <span class="inline-flex rounded-full px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-wide ring-1 {{ $payment->status->classes() }}">
+                                        {{ $payment->status->label() }}
+                                    </span>
+                                </div>
+
+                                <p class="mt-1 font-mono text-[10px] text-tide-500">
+                                    {{ $payment->reference }}
+                                    @if ($payment->link_sent_at)
+                                        &middot; emailed {{ $payment->link_send_count }}&times;, last {{ $payment->link_sent_at->diffForHumans(short: true) }}
+                                    @else
+                                        &middot; not emailed yet
+                                    @endif
+                                    @if ($payment->paid_at)
+                                        &middot; paid {{ $payment->paid_at->format('M j, H:i') }}
+                                    @elseif ($payment->link_expires_at)
+                                        &middot; link {{ $payment->isExpired() ? 'expired' : 'expires' }} {{ $payment->link_expires_at->diffForHumans(short: true) }}
+                                    @endif
+                                </p>
+
+                                @if ($payment->amountReceived() && ! $payment->amountMatches())
+                                    {{-- Never folded away: a mismatch is why a paid booking
+                                         may not have been confirmed. --}}
+                                    <p class="mt-1 text-xs font-medium text-rose-700">
+                                        Stripe captured {{ $payment->amountReceived()->format() }} — does not match what we asked for.
+                                    </p>
+                                @endif
+
+                                @if ($payment->stripe_payment_intent_id || $payment->stripe_checkout_session_id)
+                                    <p class="mt-1 break-all font-mono text-[10px] text-tide-400">
+                                        {{ $payment->stripe_payment_intent_id ?: $payment->stripe_checkout_session_id }}
+                                    </p>
+                                @endif
+                            </li>
+                        @empty
+                            <li class="py-4 text-sm text-tide-600">No payment rows on this booking.</li>
+                        @endforelse
+                    </ul>
+
+                    {{-- ------------------------------------------- the one action --}}
+                    <div class="mt-5 border-t border-fog-200 pt-5">
+                        @if ($sendable)
+                            <form method="POST" action="{{ route('admin.reservations.payment-link', $reservation->id) }}">
+                                @csrf
+                                <button type="submit"
+                                        class="rounded-full bg-brand-600 px-6 py-2.5 text-sm font-medium text-white transition hover:bg-brand-700">
+                                    Email the {{ $sendable->value }} link &mdash;
+                                    {{ ($sendable === \App\Enums\PaymentType::Balance ? $booking->balanceAmount() : $booking->depositAmount())->format() }}
+                                </button>
+
+                                {{-- Says what pressing it does, because it emails a real
+                                     person about real money. --}}
+                                <p class="mt-2 text-xs text-tide-600">
+                                    Sends {{ $booking->guest_email }} a fresh, signed payment link. Safe to press twice:
+                                    the same payment is re-sent, never a second charge.
+                                </p>
+                            </form>
+                        @else
+                            <p class="text-sm text-tide-600">
+                                Nothing outstanding to chase
+                                @if ($booking->status->isTerminal())
+                                    &mdash; this booking is {{ strtolower($booking->status->label()) }}.
+                                @else
+                                    &mdash; the full amount is paid.
+                                @endif
+                            </p>
+                        @endif
+                    </div>
+                </section>
+
+                {{-- ------------------------------------------------ the trail --}}
+                <section class="rounded-3xl bg-white p-6 ring-1 ring-black/5">
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                        <h2 class="font-mono text-[10px] uppercase tracking-wide text-tide-500">
+                            Audit trail &middot; last {{ $audits->count() }} of {{ number_format($auditTotal) }}
+                        </h2>
+                        <a href="{{ route('admin.audits.show', $booking) }}"
+                           class="font-mono text-[10px] uppercase tracking-wide text-brand-600 hover:text-brand-800">
+                            Full trail
+                        </a>
+                    </div>
+
+                    <ol class="mt-4 divide-y divide-fog-200 border-t border-fog-200">
+                        @foreach ($audits as $entry)
+                            <li class="flex flex-wrap items-start gap-x-3 gap-y-1 py-3">
+                                <span class="w-28 shrink-0 font-mono text-[10px] text-tide-500">
+                                    {{ $entry->created_at->format('M j H:i') }}
+                                </span>
+                                <span class="inline-flex rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide ring-1 {{ $entry->badgeClasses() }}">
+                                    {{ $entry->event }}
+                                </span>
+                                @if ($entry->from_status || $entry->to_status)
+                                    <span class="font-mono text-[10px] text-tide-600">
+                                        {{ $entry->from_status ?? '—' }} &rarr; {{ $entry->to_status ?? '—' }}
+                                    </span>
+                                @endif
+                                <span class="font-mono text-[10px] uppercase tracking-wide text-tide-400">{{ $entry->actor_type }}</span>
+                            </li>
+                        @endforeach
+                    </ol>
+                </section>
+            @else
+                <section class="rounded-3xl bg-white p-6 ring-1 ring-black/5">
+                    <h2 class="font-mono text-[10px] uppercase tracking-wide text-tide-500">Payments</h2>
+                    <p class="mt-3 text-sm text-tide-600">
+                        This reservation was not taken through this website, so we hold no payment
+                        record for it &mdash; it came in by phone or through another channel, and
+                        Lodgify has whatever was collected. There is nothing here to email or refund.
+                    </p>
+                </section>
+            @endif
+
             {{-- Everything Lodgify sent, including fields the mapper does not yet
                  understand. Better visible than silently dropped. --}}
             <details class="rounded-3xl bg-white p-6 ring-1 ring-black/5">
