@@ -42,6 +42,13 @@ lead-capture / CMS-lite data alongside it.
 
 - **PHP** ^8.3, **Laravel** ^13.17
 - **Frontend**: Blade templates, Alpine.js ^3.16, Tailwind CSS ^4, Vite ^8, `laravel-vite-plugin` ^3.1
+  - **Tailwind v4 gotcha, worth knowing before debugging "unstyled" markup:** v4 detects its
+    own content automatically and that detection **skips anything matched by `.gitignore`**.
+    `/vendor` is gitignored, so utility classes that appear *only* inside a package's Blade
+    views are never compiled — the markup renders with no styling at all. This is why the
+    paginator lives at `resources/views/vendor/pagination/tailwind.blade.php` rather than
+    being used from the framework. Any other vendor view we render will need the same
+    treatment (or an explicit `@source` in `resources/css/app.css`).
 - **Database**: SQLite by default (`DB_CONNECTION=sqlite`); the `database` driver also
   backs cache, sessions and queues
 - **Tooling**: Pint (formatting), PHPUnit ^12.5, Pail (log tailing), Tinker

@@ -122,7 +122,21 @@
             <a href="{{ route('admin.reservations.index') }}"
                class="text-sm text-tide-500 hover:text-ink-900">Reset</a>
 
-            <span class="ml-auto font-mono text-[11px] uppercase tracking-wide text-tide-500">
+            {{-- Inside the filter form on purpose: applying filters keeps the chosen page
+                 size, and because the paginator appends the whole query string, so do the
+                 page links. Free to raise here — the whole result set is already in
+                 memory. --}}
+            <label class="ml-auto inline-flex items-center gap-2 font-mono text-[10px] uppercase tracking-wide text-tide-500">
+                Per page
+                <select name="per_page" onchange="this.form.requestSubmit()"
+                        class="rounded-full border-0 bg-white py-1.5 pl-3 pr-8 font-mono text-[11px] text-tide-700 ring-1 ring-fog-300 focus:ring-2 focus:ring-brand-400">
+                    @foreach ($perPageOptions as $option)
+                        <option value="{{ $option }}" @selected($perPage === $option)>{{ $option }}</option>
+                    @endforeach
+                </select>
+            </label>
+
+            <span class="font-mono text-[11px] uppercase tracking-wide text-tide-500">
                 {{ number_format($matched) }} {{ Str::plural('match', $matched) }}
             </span>
         </div>
