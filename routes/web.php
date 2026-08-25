@@ -285,3 +285,5 @@ Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(fun
     Route::post('/reservations/refresh',[AdminReservationController::class, 'refresh'])->name('reservations.refresh');
     Route::get('/reservations/{id}',   [AdminReservationController::class, 'show'])->name('reservations.show');
 });
+
+// comment
