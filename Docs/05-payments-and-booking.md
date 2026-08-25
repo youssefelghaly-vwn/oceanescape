@@ -419,6 +419,26 @@ failed would take a live link away from someone whose second card would have wor
 the line, "I tried three times and it wouldn't work" is unanswerable from our side — every one
 of those attempts lives only in Stripe.
 
+## Reading it: `/admin/audits`
+
+The table exists so that "why was I charged this?" is answerable months later **by a
+non-engineer** — which needs a reader, not just a schema. Two screens, because there are two
+questions:
+
+| Screen | Question it answers |
+|---|---|
+| `/admin/audits` | *What has been happening?* Every event, newest first, filtered by prefix (booking / payment / stripe / lodgify), actor, or free text over booking reference, payment reference, guest email and cottage. |
+| `/admin/audits/{booking}` | *What happened to this booking?* Its whole trail oldest-first — the order it has to be read in to explain anything — beside its status, money and payment rows. |
+
+A **Needs a human** filter and counter pick out the events the vocabulary below marks as
+needing attention (`payment.amount_mismatch`, `lodgify.mark_booked.exhausted`, and the rest
+of `BookingAuditLog::NEEDS_ATTENTION`). Before this, the alert email was the only way to
+learn about a stuck booking.
+
+Both screens are `auth` + `admin`, GET-only, and offer no way to change anything — the rows
+are immutable at the model, so a form here would be an affordance that cannot work. The
+context column renders as-is because it was already scrubbed on the way in.
+
 ## The audit table is immutable
 
 No `updated_at`, and the model throws on `updating` and `deleting`. An audit trail that
@@ -624,7 +644,7 @@ Removed: `checkout_intents` (see the table at the top of this document).
 
 # Part 8 — Testing
 
-**161 tests, 1,053 assertions, all passing.** `php artisan test`
+**175 tests, 1,107 assertions, all passing.** `php artisan test`
 
 | Suite | Covers |
 |---|---|
@@ -645,6 +665,7 @@ Removed: `checkout_intents` (see the table at the top of this document).
 | `DirectPaymentTest` | The signed-in pay-now path: redirect to the signed pay route, delayed fallback email, and the **four fallbacks** — signed out, unverified, booking someone else's address, feature disabled. Plus prefill, profile backfill, and that a booking for someone else does not rewrite the account holder's details |
 | `NoCardSavingTest` | The session payload omits `setup_future_usage`, `customer`, `customer_creation` and `saved_payment_method_options`; metadata carries references only; **no table has a column that looks like it stores card data** |
 | `PaymentAttemptLogTest` | Payment events reach `storage/logs/payments-*.log` and booking-only events do not; failures logged at error level; secrets redacted; a declined card logged **without** making the link unpayable |
+| `BookingAuditAdminTest` | The audit screens: signed-out redirect and non-admin 403 on **both** routes, event listing, prefix and needs-a-human filters, search by booking/payment reference and email, secrets still redacted on screen, **no mutating affordance on the page**, trail ordering, and a trail that outlives its deleted booking |
 | `LodgifyWriteResponseShapeTest` | **Regression:** bare-integer / quoted-string / object / wrapped-object create responses, 2xx-with-no-id failing loudly, money-at-risk severity, and no transport-level retry on writes |
 | `ReconcileOrphansTest` | Report-vs-link, confident match, refusing an ambiguous or someone-else's reservation, email disambiguation, and not reviving a `failed` booking |
 | `NoLodgifyCheckoutTest` | The hosted-checkout classes, routes, table, column and settings are all absent — and the read-only `checkout.lodgify.com` fallback is deliberately kept |
@@ -747,10 +768,17 @@ outstanding balance on bookings that are fully paid. Our records are correct; Lo
 design, since a partial refund and a cancellation look identical. Cancellation is a manual
 admin action, and there is no admin UI for it yet.
 
-### No admin UI for bookings
-`bookings`, `booking_payments` and `booking_audit_logs` have no screens. Nothing surfaces
-`needsAttention()` bookings in the admin area, so the alert email is currently the only
-route to a stuck booking. That is the most valuable follow-up.
+### Admin UI: the audit trail has one, bookings do not
+`booking_audit_logs` is readable at **`/admin/audits`** — every event, filterable, with one
+booking's whole trail at `/admin/audits/{booking}` (see Part 5). A **Needs a human** filter
+and counter surface the failure events, so the alert email is no longer the only route to a
+stuck booking.
+
+Still missing: screens for `bookings` and `booking_payments` themselves. There is nowhere to
+list bookings by status, re-send a payment link, refund, or mark a Lodgify write as handled —
+those are still Tinker or the Lodgify dashboard. The audit screens are deliberately
+**read-only**, because audit rows are immutable; an actions screen belongs on the booking, not
+on its trail.
 
 ### Not implemented
 - No partial/custom payment amounts, payment plans beyond deposit+balance, or multi-currency

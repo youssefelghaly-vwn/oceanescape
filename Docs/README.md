@@ -55,6 +55,8 @@ app/Http/Controllers/               thin controllers; almost no business logic
 app/Services/Booking/               booking orchestration, deposit policy, audit
 app/Services/Payments/              Stripe gateway, payment links, settlement,
                                     payment attempt log (storage/logs/payments-*.log)
+app/Http/Controllers/Admin/         admin screens, incl. the audit-trail reader
+                                    (/admin/audits)
 app/Services/Lodgify/               the whole Lodgify integration (~4,100 lines)
   LodgifyClient.php                 raw HTTP transport + endpoint knowledge
   LodgifyRepository.php             caching, mapping, availability/rate/quote logic

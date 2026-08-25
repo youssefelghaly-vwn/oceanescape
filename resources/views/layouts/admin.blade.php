@@ -49,6 +49,7 @@
                         ['label' => 'Business stays', 'route' => 'admin.business-stays.index'],
                         ['label' => 'Messages', 'route' => 'admin.messages.index'],
                         ['label' => 'Guest photos', 'route' => 'admin.photos.index'],
+                        ['label' => 'Audit trail', 'route' => 'admin.audits.index'],
                     ];
                 @endphp
 

@@ -20,6 +20,7 @@ use App\Http\Controllers\ReviewController;
 use App\Http\Controllers\BookingController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\Webhooks\StripeWebhookController;
+use App\Http\Controllers\Admin\BookingAuditController;
 use App\Http\Controllers\Admin\ReservationController as AdminReservationController;
 use App\Http\Controllers\Auth\RegisterController;
 use App\Http\Controllers\ProfileController;
@@ -277,6 +278,21 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/account',           [ProfileController::class, 'edit'])->name('account.edit');
     Route::patch('/account',         [ProfileController::class, 'update'])->name('account.update');
     Route::put('/account/password',  [ProfileController::class, 'updatePassword'])->name('account.password');
+});
+
+/*
+ * -------------------------------------------------------------- admin audits
+ * The reader for `booking_audit_logs`. That table was built so "why was I charged this?"
+ * and "I paid, where is my booking?" are answerable months later by a non-engineer; until
+ * this screen existed, answering either meant Tinker or grepping storage/logs.
+ *
+ * READ-ONLY, deliberately: GET only, no actions. The rows are immutable at the model, so a
+ * screen offering to change one would be lying about what it can do.
+ */
+Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(function () {
+    Route::get('/audits', [BookingAuditController::class, 'index'])->name('audits.index');
+    // {booking} is the local booking id — this trail is ours, not Lodgify's.
+    Route::get('/audits/{booking}', [BookingAuditController::class, 'show'])->name('audits.show');
 });
 
 // -------------------------------------------------------- admin reservations
