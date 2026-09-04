@@ -1,4 +1,3 @@
-{{-- resources/views/admin/reservations/show.blade.php --}}
 <x-admin-layout :title="$reservation->guestName ?: ('Reservation ' . $reservation->reference())">
     <x-slot:heading>
         <a href="{{ route('admin.reservations.index') }}"

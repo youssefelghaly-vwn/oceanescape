@@ -210,7 +210,7 @@
                                 <td class="px-5 py-4 text-tide-700">
                                     {{ Str::limit($r->propertyName ?: ('#' . $r->propertyId), 28) }}
                                     @if ($r->source)
-                                        <span class="mt-0.5 block font-mono text-[10px] uppercase text-tide-400">{{ $r->source }}</span>
+                                        <span class="mt-0.5 block font-mono text-[10px] uppercase text-tide-400">{{ Str::limit($r->source , 28) }}</span>
                                     @endif
                                 </td>
 
