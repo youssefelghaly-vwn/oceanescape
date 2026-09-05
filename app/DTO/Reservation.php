@@ -109,6 +109,55 @@ class Reservation
         return '#' . $this->id;
     }
 
+    /**
+     * Same reservation, with the money fields replaced.
+     *
+     * Lodgify's total/paid/due are the wrong answer for a booking taken on our own
+     * site: the money moves through Stripe and never touches Lodgify's own ledger,
+     * so Lodgify reports it as unpaid forever even after it is settled. Callers use
+     * this to swap in the database's figures — the only trustworthy source for
+     * money on a booking that exists locally — while leaving every non-money field
+     * (dates, guest, status, policy...) exactly as Lodgify reported it.
+     */
+    public function withMoney(float $total, float $amountPaid, float $amountDue, ?string $currency = null): self
+    {
+        return new self(
+            id: $this->id,
+            status: $this->status,
+            source: $this->source,
+            propertyId: $this->propertyId,
+            propertyName: $this->propertyName,
+            roomTypeId: $this->roomTypeId,
+            arrival: $this->arrival,
+            departure: $this->departure,
+            nights: $this->nights,
+            checkInTime: $this->checkInTime,
+            checkOutTime: $this->checkOutTime,
+            guestName: $this->guestName,
+            guestEmail: $this->guestEmail,
+            guestPhone: $this->guestPhone,
+            guestCountry: $this->guestCountry,
+            adults: $this->adults,
+            children: $this->children,
+            infants: $this->infants,
+            pets: $this->pets,
+            total: $total,
+            amountPaid: $amountPaid,
+            amountDue: $amountDue,
+            currency: $currency ?? $this->currency,
+            subtotals: $this->subtotals,
+            policy: $this->policy,
+            createdAt: $this->createdAt,
+            canceledAt: $this->canceledAt,
+            notes: $this->notes,
+            isDeleted: $this->isDeleted,
+            rooms: $this->rooms,
+            addOns: $this->addOns,
+            payments: $this->payments,
+            raw: $this->raw,
+        );
+    }
+
     public function guestFirstName(): string
     {
         return Str::before(trim((string) $this->guestName), ' ') ?: 'Guest';

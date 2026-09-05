@@ -44,6 +44,11 @@
                     </dd>
                 </div>
 
+                <div class="flex justify-between gap-4 bg-white px-6 py-3.5">
+                    <dt class="text-tide-600">Paid</dt>
+                    <dd class="font-medium text-ink-900">{{ $reservation->money($reservation->amountPaid) }}</dd>
+                </div>
+
                 @if (($reservation->amountDue ?? 0) > 0)
                     <div class="flex justify-between gap-4 bg-white px-6 py-3.5">
                         <dt class="text-amber-800">Outstanding balance</dt>
