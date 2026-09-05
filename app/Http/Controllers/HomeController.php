@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\Google\GoogleReviewsService;
 use App\Services\Lodgify\LodgifyRepository;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\Log;
@@ -9,7 +10,10 @@ use Illuminate\View\View;
 
 class HomeController extends Controller
 {
-    public function __construct(protected LodgifyRepository $lodgify) {}
+    public function __construct(
+        protected LodgifyRepository $lodgify,
+        protected GoogleReviewsService $google,
+    ) {}
 
     public function index(): View
     {
@@ -27,6 +31,17 @@ class HomeController extends Controller
             }
         }
 
-        return view('pages.home', ['listings' => $listings]);
+        $reviewsData = null;
+
+        try {
+            $reviewsData = $this->google->fetch();
+        } catch (\Throwable $e) {
+            Log::error('home.index reviews failed', ['message' => $e->getMessage()]);
+        }
+
+        return view('pages.home', [
+            'listings' => $listings,
+            'reviewsData' => $reviewsData,
+        ]);
     }
 }

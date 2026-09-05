@@ -31,15 +31,143 @@
         <x-booking-search />
     </div>
 
-    {{-- Facts strip — real, not fabricated trust signals --}}
+    {{-- Reviews — real guest feedback, replaces the old facts strip --}}
+    @php
+        $homeReviews = collect($reviewsData['reviews'] ?? [])->take(4);
+        $homeRating  = $reviewsData['rating'] ?? null;
+        $homeTotal   = $reviewsData['total'] ?? null;
+    @endphp
     <section class="border-b border-fog-200 bg-white pt-20">
-        <div class="mx-auto grid max-w-7xl grid-cols-2 gap-8 px-6 py-10 sm:grid-cols-4 lg:px-8">
-            @foreach ([['6', 'Oceanfront Cottages'], ['90-Day', 'Live Availability Window'], ['0', 'Hidden Fees at Checkout'], ['1', 'Stretch of Nova Scotia Coast']] as [$stat, $label])
-                <div data-reveal class="text-center">
-                    <p class="font-display text-3xl font-medium text-brand-700">{{ $stat }}</p>
-                    <p class="mt-1 font-mono text-[11px] uppercase tracking-wide text-tide-500">{{ $label }}</p>
+        <div class="mx-auto max-w-7xl px-6 py-10 lg:px-8">
+            <div data-reveal class="mx-auto max-w-2xl text-center">
+                <p class="font-mono text-[11px] uppercase tracking-[0.2em] text-brand-600">Guest Reviews</p>
+                <h2 class="mt-3 font-display text-3xl font-medium text-ink-900 sm:text-4xl">
+                    What our guests say
+                </h2>
+
+                @if ($homeRating)
+                    <div class="mt-4 flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
+                        <div class="flex gap-0.5" role="img" aria-label="{{ number_format($homeRating, 1) }} out of 5 stars">
+                            @for ($i = 1; $i <= 5; $i++)
+                                <svg width="16" height="16" viewBox="0 0 24 24"
+                                     class="{{ $i <= round($homeRating) ? 'text-amber-400' : 'text-fog-300' }}"
+                                     fill="currentColor" aria-hidden="true">
+                                    <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+                                </svg>
+                            @endfor
+                        </div>
+                        <span class="font-mono text-sm text-tide-500">
+                            {{ number_format($homeRating, 1) }}@if ($homeTotal) &middot; {{ number_format($homeTotal) }} Google {{ Str::plural('review', $homeTotal) }}@endif
+                        </span>
+                    </div>
+                @endif
+            </div>
+
+            @if ($homeReviews->isNotEmpty())
+                <div class="mx-auto mt-12 grid max-w-6xl gap-5 sm:grid-cols-2 lg:grid-cols-4">
+                    @foreach ($homeReviews as $review)
+                        <figure data-reveal class="flex flex-col rounded-3xl bg-fog-50 p-6 ring-1 ring-black/5">
+                            <div class="flex gap-0.5" role="img" aria-label="{{ $review['rating'] }} out of 5">
+                                @for ($s = 1; $s <= 5; $s++)
+                                    <svg width="13" height="13" viewBox="0 0 24 24"
+                                         class="{{ $s <= $review['rating'] ? 'text-amber-400' : 'text-fog-300' }}"
+                                         fill="currentColor" aria-hidden="true">
+                                        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+                                    </svg>
+                                @endfor
+                            </div>
+                            <blockquote class="mt-4 line-clamp-5 whitespace-pre-line text-sm leading-relaxed text-tide-700">
+                                {{ $review['excerpt'] }}
+                            </blockquote>
+                            <figcaption class="mt-5 flex items-center gap-3 border-t border-fog-200 pt-4">
+                                @if ($review['photo'])
+                                    <img src="{{ $review['photo'] }}" alt="" loading="lazy"
+                                         referrerpolicy="no-referrer"
+                                         class="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-black/5">
+                                @else
+                                    <span class="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-brand-100 font-display text-xs text-brand-700">
+                                        {{ Str::substr($review['author'], 0, 1) }}
+                                    </span>
+                                @endif
+                                <span class="min-w-0">
+                                    <span class="block truncate text-sm font-medium text-ink-900">{{ $review['author'] }}</span>
+                                    @if ($review['relative'])
+                                        <span class="block font-mono text-[10px] uppercase tracking-wide text-tide-500">
+                                            {{ $review['relative'] }}
+                                        </span>
+                                    @endif
+                                </span>
+                            </figcaption>
+                        </figure>
+                    @endforeach
                 </div>
-            @endforeach
+            @else
+                <div data-reveal class="mx-auto mt-12 max-w-lg rounded-3xl bg-fog-50 px-6 py-10 text-center ring-1 ring-black/5">
+                    <p class="text-sm text-tide-600">
+                        Reviews are on their way &mdash; in the meantime, take a look at our
+                        <a href="{{ route('reviews') }}" class="font-medium text-brand-700 underline">Google listing</a>.
+                    </p>
+                </div>
+            @endif
+
+            <div class="mt-10 text-center">
+                <a href="{{ route('reviews') }}"
+                   class="inline-flex items-center gap-2 rounded-full px-6 py-3 text-sm font-semibold text-brand-700 ring-1 ring-brand-200 transition hover:gap-3 hover:bg-brand-50">
+                    View all reviews
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M5 12h14M13 6l6 6-6 6"/>
+                    </svg>
+                </a>
+            </div>
+        </div>
+    </section>
+
+    {{-- Our Cottages --}}
+    <section id="cottages" class="bg-white py-20 lg:py-24">
+        <div class="mx-auto max-w-7xl px-6 lg:px-8">
+            <div data-reveal class="mb-12 max-w-2xl">
+                <p class="font-mono text-[11px] uppercase tracking-[0.2em] text-brand-600">Our Cottages</p>
+                <h2 class="mt-3 font-display text-3xl font-medium text-ink-900 sm:text-4xl">
+                    Six cottages, each with its own personality
+                </h2>
+                <p class="mt-5 text-base leading-relaxed text-tide-700">
+                    All with ocean views. From cozy couple&rsquo;s retreats to family-sized stays, each one is
+                    thoughtfully outfitted so you can simply arrive, unpack, and enjoy the beach.
+                </p>
+            </div>
+
+            @if ($listings->isEmpty())
+                <div class="rounded-3xl bg-fog-50 px-6 py-10 text-center ring-1 ring-black/5">
+                    <p class="text-sm text-tide-600">
+                        Cottage listings are loading. Please refresh in a moment, or
+                        <a href="mailto:info@oceanescapecottages.ca" class="font-medium text-brand-700 underline">email us</a>.
+                    </p>
+                </div>
+            @else
+                <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                    @foreach ($listings as $listing)
+                        <div data-reveal>
+                            <x-cottage-card :cottage="$listing['cottage']" variant="plain">
+                                <x-cottage-openings
+                                    :cottage="$listing['cottage']"
+                                    :windows="$listing['windows']"
+                                    :limit="2"
+                                />
+                            </x-cottage-card>
+                        </div>
+                    @endforeach
+                </div>
+
+                <div class="mt-12 text-center">
+                    <a href="{{ route('cottages.index') }}"
+                       class="inline-flex items-center gap-2 rounded-full px-6 py-3 text-sm font-semibold text-brand-700 ring-1 ring-brand-200 transition hover:gap-3 hover:bg-brand-50">
+                        See full details &amp; availability
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M5 12h14M13 6l6 6-6 6"/>
+                        </svg>
+                    </a>
+                </div>
+            @endif
         </div>
     </section>
 
@@ -127,55 +255,6 @@
                     </li>
                 @endforeach
             </ul>
-        </div>
-    </section>
-
-    {{-- Our Cottages --}}
-    <section id="cottages" class="bg-white py-20 lg:py-24">
-        <div class="mx-auto max-w-7xl px-6 lg:px-8">
-            <div data-reveal class="mb-12 max-w-2xl">
-                <p class="font-mono text-[11px] uppercase tracking-[0.2em] text-brand-600">Our Cottages</p>
-                <h2 class="mt-3 font-display text-3xl font-medium text-ink-900 sm:text-4xl">
-                    Six cottages, each with its own personality
-                </h2>
-                <p class="mt-5 text-base leading-relaxed text-tide-700">
-                    All with ocean views. From cozy couple&rsquo;s retreats to family-sized stays, each one is
-                    thoughtfully outfitted so you can simply arrive, unpack, and enjoy the beach.
-                </p>
-            </div>
-
-            @if ($listings->isEmpty())
-                <div class="rounded-3xl bg-fog-50 px-6 py-10 text-center ring-1 ring-black/5">
-                    <p class="text-sm text-tide-600">
-                        Cottage listings are loading. Please refresh in a moment, or
-                        <a href="mailto:info@oceanescapecottages.ca" class="font-medium text-brand-700 underline">email us</a>.
-                    </p>
-                </div>
-            @else
-                <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-                    @foreach ($listings as $listing)
-                        <div data-reveal>
-                            <x-cottage-card :cottage="$listing['cottage']" variant="plain">
-                                <x-cottage-openings
-                                    :cottage="$listing['cottage']"
-                                    :windows="$listing['windows']"
-                                    :limit="2"
-                                />
-                            </x-cottage-card>
-                        </div>
-                    @endforeach
-                </div>
-
-                <div class="mt-12 text-center">
-                    <a href="{{ route('cottages.index') }}"
-                       class="inline-flex items-center gap-2 rounded-full px-6 py-3 text-sm font-semibold text-brand-700 ring-1 ring-brand-200 transition hover:gap-3 hover:bg-brand-50">
-                        See full details &amp; availability
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M5 12h14M13 6l6 6-6 6"/>
-                        </svg>
-                    </a>
-                </div>
-            @endif
         </div>
     </section>
 

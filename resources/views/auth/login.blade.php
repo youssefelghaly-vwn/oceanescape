@@ -44,5 +44,12 @@
                 class="w-full rounded-full bg-brand-600 py-3 text-sm font-semibold text-white transition hover:bg-brand-700">
             Sign in
         </button>
+
+        <p class="text-center text-sm text-tide-600">
+            Don't have an account?
+            <a href="{{ route('register') }}" class="font-semibold text-brand-600 hover:text-brand-800">
+                Register
+            </a>
+        </p>
     </form>
 </x-auth-layout>
