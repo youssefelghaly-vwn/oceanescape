@@ -3,10 +3,12 @@
 namespace App\Http\Controllers;
 
 use App\DTO\Reservation;
+use App\Models\Booking;
 use App\Services\Lodgify\ReservationRepository;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rules;
 use Illuminate\View\View;
@@ -33,7 +35,7 @@ class ProfileController extends Controller
         $failed = false;
 
         try {
-            $reservations = $this->reservations->forEmail($user->email);
+            $reservations = $this->withLocalTotals($this->reservations->forEmail($user->email));
         } catch (\Throwable $e) {
             report($e);
             $failed = true;
@@ -73,7 +75,60 @@ class ProfileController extends Controller
                 ->with('profile_error', 'We couldn\'t find that booking on your account.');
         }
 
+        if ($booking = $this->localBookingFor($reservation->id)) {
+            $reservation = $this->applyLocalTotals($reservation, $booking);
+        }
+
         return view('pages.reservation', ['reservation' => $reservation]);
+    }
+
+    /**
+     * Swap Lodgify's money fields for the database's, on every reservation with a
+     * matching local `Booking` row.
+     *
+     * A reservation with no local row was taken by phone, or through Airbnb or
+     * Booking.com — those exist only in Lodgify, so its own totals are shown as-is.
+     *
+     * @param  Collection<int, Reservation>  $reservations
+     * @return Collection<int, Reservation>
+     */
+    protected function withLocalTotals(Collection $reservations): Collection
+    {
+        $ids = $reservations->pluck('id')->all();
+        if ($ids === []) {
+            return $reservations;
+        }
+
+        $bookings = Booking::query()
+            ->with('payments')
+            ->whereIn('lodgify_booking_id', $ids)
+            ->get()
+            ->keyBy('lodgify_booking_id');
+
+        return $reservations->map(function (Reservation $r) use ($bookings) {
+            $booking = $bookings->get($r->id);
+
+            return $booking ? $this->applyLocalTotals($r, $booking) : $r;
+        });
+    }
+
+    protected function applyLocalTotals(Reservation $reservation, Booking $booking): Reservation
+    {
+        return $reservation->withMoney(
+            total: $booking->total()->toFloat(),
+            amountPaid: $booking->amountPaid()->toFloat(),
+            amountDue: $booking->amountOutstanding()->toFloat(),
+            currency: $booking->currency,
+        );
+    }
+
+    /** Our own record of a Lodgify reservation, if this booking came through this site. */
+    protected function localBookingFor(string $lodgifyBookingId): ?Booking
+    {
+        return Booking::query()
+            ->with('payments')
+            ->where('lodgify_booking_id', $lodgifyBookingId)
+            ->first();
     }
 
     /** GET /account */

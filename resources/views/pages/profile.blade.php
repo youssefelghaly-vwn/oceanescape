@@ -130,10 +130,19 @@
                                             <p class="font-display text-xl font-medium text-ink-900">
                                                 {{ $r->money($r->total) }}
                                             </p>
-                                            @if (($r->amountDue ?? 0) > 0 && !$r->isCancelled())
-                                                <p class="mt-0.5 font-mono text-[10px] uppercase tracking-wide text-amber-700">
-                                                    {{ $r->money($r->amountDue) }} outstanding
-                                                </p>
+                                            @if (!$r->isCancelled() && $r->amountDue !== null)
+                                                @if ($r->amountDue > 0)
+                                                    <p class="mt-0.5 font-mono text-[10px] uppercase tracking-wide text-tide-500">
+                                                        {{ $r->money($r->amountPaid) }} paid
+                                                    </p>
+                                                    <p class="mt-0.5 font-mono text-[10px] uppercase tracking-wide text-amber-700">
+                                                        {{ $r->money($r->amountDue) }} outstanding
+                                                    </p>
+                                                @else
+                                                    <p class="mt-0.5 font-mono text-[10px] uppercase tracking-wide text-emerald-700">
+                                                        Paid in full
+                                                    </p>
+                                                @endif
                                             @endif
                                         </div>
 
